@@ -148,8 +148,8 @@ class WhatsAppAccessibilityService : AccessibilityService() {
     }
 
     fun startCalibrationCapture() {
-        log("Calibrare: fac o captură a ecranului curent în 5 secunde — deschide WhatsApp și ajunge pe poza mare de profil")
-        main.postDelayed({ captureForCalibration() }, 5000)
+        log("Calibrare: ai 20 de secunde — deschide WhatsApp, intră pe contact, apasă pe avatar și așteaptă nemișcat pe poza mare")
+        main.postDelayed({ captureForCalibration() }, 20000)
     }
 
     private fun captureForCalibration() {
@@ -165,10 +165,14 @@ class WhatsAppAccessibilityService : AccessibilityService() {
                     try {
                         val bitmap = hardwareResultToBitmap(result)
                         if (bitmap != null) {
+                            val avgBrightness = averageBrightness(bitmap)
                             val file = File(cacheDir, "calibration.png")
                             FileOutputStream(file).use { out -> bitmap.compress(Bitmap.CompressFormat.PNG, 100, out) }
                             bitmap.recycle()
-                            log("Calibrare: captură salvată")
+                            log("Calibrare: captură salvată (luminozitate medie: $avgBrightness/255)")
+                            if (avgBrightness < 20) {
+                                log("Calibrare: ecranul pare aproape complet negru — probabil nu erai încă pe poza mare când s-a făcut captura. Verifică imaginea și, dacă nu se vede poza, apasă din nou Calibrează și fii mai rapid la navigare.")
+                            }
                             listener?.onCalibrationCaptured(file.absolutePath)
                         } else {
                             log("Calibrare: captura a eșuat (bitmap null)")
@@ -195,6 +199,26 @@ class WhatsAppAccessibilityService : AccessibilityService() {
             it.recycle()
             copy
         }
+    }
+
+    private fun averageBrightness(bitmap: Bitmap): Int {
+        val cols = 10
+        val rows = 10
+        var total = 0L
+        var samples = 0
+        for (i in 0 until cols) {
+            for (j in 0 until rows) {
+                val x = (bitmap.width * (i + 0.5f) / cols).toInt().coerceIn(0, bitmap.width - 1)
+                val y = (bitmap.height * (j + 0.5f) / rows).toInt().coerceIn(0, bitmap.height - 1)
+                val pixel = bitmap.getPixel(x, y)
+                val r = (pixel shr 16) and 0xFF
+                val g = (pixel shr 8) and 0xFF
+                val b = pixel and 0xFF
+                total += (r + g + b) / 3
+                samples++
+            }
+        }
+        return (total / samples).toInt()
     }
 
     fun stopSync() {

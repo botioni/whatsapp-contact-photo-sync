@@ -82,9 +82,9 @@ class MainActivity : AppCompatActivity(), SyncListener {
             AlertDialog.Builder(this)
                 .setTitle("Calibrare captură")
                 .setMessage(
-                    "Apasă OK, apoi în 5 secunde: deschide WhatsApp, intră pe un contact " +
-                        "cu poză de profil și apasă pe avatar ca să se mărească poza. " +
-                        "Ecranul se va captura automat, fără să mai faci altceva."
+                    "Apasă OK, apoi ai 20 de secunde: deschide WhatsApp, intră pe un contact " +
+                        "cu poză de profil, apasă pe avatar ca să se mărească poza și rămâi " +
+                        "nemișcat pe acel ecran. Captura se face automat la final de numărătoare."
                 )
                 .setPositiveButton("OK") { _, _ -> service.startCalibrationCapture() }
                 .setNegativeButton("Renunță", null)
