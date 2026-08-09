@@ -198,15 +198,13 @@ class WhatsAppAccessibilityService : AccessibilityService() {
         hb.close()
         if (hwBitmap == null) return null
 
-        // hwBitmap.copy(ARGB_8888, ...) reads the GPU buffer's memory
-        // directly, which some GPU drivers (notably on several Samsung
-        // devices) silently return as all-black when the buffer wasn't
-        // allocated CPU-readable — no error, just a black bitmap. Drawing it
-        // through a Canvas instead goes through the same GPU texture-sample
-        // path used to put it on screen in the first place, which is always
-        // supported.
-        val out = Bitmap.createBitmap(hwBitmap.width, hwBitmap.height, Bitmap.Config.ARGB_8888)
-        android.graphics.Canvas(out).drawBitmap(hwBitmap, 0f, 0f, null)
+        // Both hwBitmap.copy(ARGB_8888, ...) and drawing it through a Canvas
+        // came back solid black on this device — confirmed by testing, not
+        // just theory. Bitmap.createBitmap(source, x, y, w, h) is what the
+        // very first version of this app used (no manual conversion at all)
+        // and it produced a real, usable photo, so use that same path for
+        // the full-size "subset" here too instead of a from-scratch bitmap.
+        val out = Bitmap.createBitmap(hwBitmap, 0, 0, hwBitmap.width, hwBitmap.height)
         hwBitmap.recycle()
         return out
     }
