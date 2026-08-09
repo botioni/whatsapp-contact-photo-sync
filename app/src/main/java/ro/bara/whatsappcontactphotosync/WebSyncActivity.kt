@@ -31,6 +31,10 @@ class WebSyncActivity : AppCompatActivity() {
     private var updated = 0
     private var skipped = 0
 
+    private var missingQueue: List<String> = emptyList()
+    private var missingIndex = 0
+    private var waitingForMissingLoad = false
+
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -44,7 +48,17 @@ class WebSyncActivity : AppCompatActivity() {
             userAgentString = DESKTOP_USER_AGENT
         }
         binding.webView.addJavascriptInterface(JsBridge(), "AndroidBridge")
-        binding.webView.webViewClient = WebViewClient()
+        binding.webView.webViewClient = object : WebViewClient() {
+            override fun onPageFinished(view: WebView, url: String?) {
+                super.onPageFinished(view, url)
+                if (waitingForMissingLoad) {
+                    waitingForMissingLoad = false
+                    // Give the SPA time to render the opened chat before we
+                    // start poking at its DOM.
+                    main.postDelayed({ extractCurrentChat() }, 3500)
+                }
+            }
+        }
         binding.webView.loadUrl("https://web.whatsapp.com")
 
         binding.runExistingButton.setOnClickListener {
@@ -59,9 +73,26 @@ class WebSyncActivity : AppCompatActivity() {
 
     private fun startMissingSearch() {
         val contacts = repo.loadContacts()
-        val phones = contacts.map { repo.normalize(it.phone) }.filter { it.length >= 7 }.distinct()
-        appendLog("Caut ${phones.size} numere prin căsuța de căutare...")
-        binding.webView.evaluateJavascript(buildSearchMissingScript(phones), null)
+        missingQueue = contacts.map { repo.normalize(it.phone) }.filter { it.length >= 7 }.distinct()
+        missingIndex = 0
+        appendLog("Caut ${missingQueue.size} numere (inclusiv fără conversație existentă)...")
+        processNextMissing()
+    }
+
+    private fun processNextMissing() {
+        if (missingIndex >= missingQueue.size) {
+            appendLog("Gata căutarea. Actualizate: $updated · Omise: $skipped")
+            return
+        }
+        val phone = missingQueue[missingIndex++]
+        appendLog("[$phone] (${missingIndex}/${missingQueue.size}) deschid...")
+        waitingForMissingLoad = true
+        binding.webView.loadUrl("https://web.whatsapp.com/send?phone=$phone")
+    }
+
+    private fun extractCurrentChat() {
+        binding.webView.evaluateJavascript(EXTRACT_CURRENT_SCRIPT, null)
+        main.postDelayed({ processNextMissing() }, 5000)
     }
 
     private fun appendLog(message: String) {
@@ -242,83 +273,37 @@ $JS_HELPERS
 """
 
         /**
-         * Searches for each phone number using WhatsApp's own left-side search
-         * box (exactly what a person would type), opens the first matching
-         * result, and extracts the avatar — all within the same page, no URL
-         * navigation, no interstitial "continue to chat" screen.
+         * Run once after navigating to web.whatsapp.com/send?phone=XXXX.
+         * This URL directly opens the conversation with that number (proven
+         * more reliable than driving the in-app search box: WhatsApp's
+         * search input relies on React's internal value-tracking, which
+         * silently stops reacting to programmatic value changes after the
+         * first search in a session — a real page navigation avoids that
+         * entirely since each load starts from a clean state).
          */
-        private fun buildSearchMissingScript(phones: List<String>): String {
-            val jsonArray = phones.joinToString(",", "[", "]") { "\"" + it.replace("\"", "") + "\"" }
-            return """
+        private val EXTRACT_CURRENT_SCRIPT = """
 (async function(){
 $JS_HELPERS
-function findSearchBox(){
-  return document.querySelector('#side div[contenteditable="true"]');
-}
-function setSearchText(el, text){
-  el.focus();
-  document.execCommand('selectAll', false, null);
-  document.execCommand('insertText', false, text);
-}
-function clearSearchBox(el){
-  if(!el) return;
-  el.focus();
-  document.execCommand('selectAll', false, null);
-  document.execCommand('delete', false, null);
-}
-
-const phones = $jsonArray;
-AndroidBridge.log('Caut ' + phones.length + ' numere...');
-
-for (let i=0;i<phones.length;i++){
-  const phone = phones[i];
   try {
-    const box = await waitFor(findSearchBox, 3000, 200);
-    if(!box){ AndroidBridge.log('[' + phone + ']: nu am găsit căsuța de căutare'); continue; }
-    setSearchText(box, phone);
-    await wait(900);
-    const cell = await waitFor(() => document.querySelector('#side [data-testid="cell-frame-container"]'), 3000, 200);
-    if(!cell){
-      AndroidBridge.log('[' + phone + ']: fără cont WhatsApp / fără rezultat');
-      clearSearchBox(findSearchBox()); await wait(400);
-      continue;
-    }
-    fullClick(cell);
-    await wait(900);
-    const convHeader = findConvHeader();
-    if(!convHeader){
-      AndroidBridge.log('[' + phone + ']: nu s-a deschis conversația');
-      clearSearchBox(findSearchBox()); await wait(300);
-      continue;
-    }
+    const convHeader = await waitFor(findConvHeader, 4000, 200);
+    if(!convHeader){ AndroidBridge.log('nu s-a deschis niciun chat (probabil nu e pe WhatsApp)'); return; }
     fullClick(convHeader.querySelector('span[dir="auto"]') || convHeader.querySelector('img'));
     const panel = await waitFor(() => {
       const p = document.querySelector('[data-testid="drawer-right"]');
       return (p && p.innerText.trim().length>0) ? p : null;
     }, 3000);
-    if(!panel){
-      AndroidBridge.log('[' + phone + ']: fără panou info');
-      closeOverlay(); await wait(300);
-      clearSearchBox(findSearchBox()); await wait(300);
-      continue;
-    }
+    if(!panel){ AndroidBridge.log('nu s-a deschis panoul de informații'); return; }
+    const phoneText = findPhoneInPanel();
+    const phone = phoneText ? sanitizePhone(phoneText) : null;
+    if(!phone){ AndroidBridge.log('nu am găsit numărul în panou'); return; }
     const url = await waitFor(findAvatarUrl, 2500, 250);
-    if(!url){
-      AndroidBridge.log('[' + phone + ']: fără poză');
-    } else {
-      const b64 = await toBase64(url);
-      AndroidBridge.savePhoto(phone, b64);
-    }
-    closeOverlay(); await wait(300);
-    clearSearchBox(findSearchBox()); await wait(400);
+    if(!url){ AndroidBridge.log('[' + phone + ']: fără poză'); return; }
+    const b64 = await toBase64(url);
+    AndroidBridge.savePhoto(phone, b64);
   } catch(e){
-    AndroidBridge.log('[' + phone + ']: eroare ' + e.message);
-    clearSearchBox(findSearchBox()); await wait(300);
+    AndroidBridge.log('eroare: ' + e.message);
   }
-}
-AndroidBridge.log('Gata căutarea contactelor lipsă. Actualizate: ' + phones.length);
 })();
 """
-        }
     }
 }
