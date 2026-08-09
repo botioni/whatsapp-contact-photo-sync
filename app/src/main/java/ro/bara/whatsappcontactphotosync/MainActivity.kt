@@ -4,35 +4,22 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
-import android.provider.Settings
-import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.content.FileProvider
-import androidx.documentfile.provider.DocumentFile
 import ro.bara.whatsappcontactphotosync.databinding.ActivityMainBinding
-import java.io.File
 
-class MainActivity : AppCompatActivity(), SyncListener {
+class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
-    private val logLines = StringBuilder()
-
-    private val pickPhotosFolder = registerForActivityResult(
-        ActivityResultContracts.OpenDocumentTree()
-    ) { uri ->
-        if (uri != null) importPhotosFromFolder(uri)
-    }
 
     private val permissions = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { result ->
         val ok = result[Manifest.permission.READ_CONTACTS] == true &&
                 result[Manifest.permission.WRITE_CONTACTS] == true
-        binding.status.text = if (ok) {
-            "Contactele sunt permise. Poți porni sincronizarea."
+        if (ok) {
+            startActivity(Intent(this, WebSyncActivity::class.java))
         } else {
-            "Trebuie permise READ_CONTACTS și WRITE_CONTACTS."
+            binding.status.text = "Trebuie permise READ_CONTACTS și WRITE_CONTACTS."
         }
     }
 
@@ -42,238 +29,15 @@ class MainActivity : AppCompatActivity(), SyncListener {
         setContentView(binding.root)
         binding.buildInfo.text = "Build ${BuildConfig.VERSION_NAME}"
 
-        binding.accessibilityButton.setOnClickListener {
-            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-        }
-
-        binding.syncButton.setOnClickListener {
-            if (!hasContactsPermission()) {
-                permissions.launch(arrayOf(
-                    Manifest.permission.READ_CONTACTS,
-                    Manifest.permission.WRITE_CONTACTS
-                ))
-                return@setOnClickListener
-            }
-
-            val service = WhatsAppAccessibilityService.instance
-            if (service == null) {
-                Toast.makeText(
-                    this,
-                    "Activează serviciul din Accesibilitate, apoi apasă din nou.",
-                    Toast.LENGTH_LONG
-                ).show()
-                return@setOnClickListener
-            }
-
-            val limit = binding.limitInput.text?.toString()?.trim()?.toIntOrNull()
-
-            logLines.clear()
-            binding.results.text = ""
-            service.startManualSync(limit)
-            binding.status.text = "Sincronizarea a fost pornită manual..."
-        }
-
-        binding.stopButton.setOnClickListener {
-            val service = WhatsAppAccessibilityService.instance
-            if (service == null) {
-                Toast.makeText(this, "Serviciul de accesibilitate nu rulează.", Toast.LENGTH_SHORT).show()
-                return@setOnClickListener
-            }
-            service.stopSync()
-        }
-
-        binding.calibrateButton.setOnClickListener {
-            val service = WhatsAppAccessibilityService.instance
-            if (service == null) {
-                Toast.makeText(this, "Activează serviciul din Accesibilitate.", Toast.LENGTH_LONG).show()
-                return@setOnClickListener
-            }
-            AlertDialog.Builder(this)
-                .setTitle("Calibrare captură")
-                .setMessage(
-                    "Apasă OK, apoi ai 10 secunde: deschide WhatsApp, intră pe un contact " +
-                        "cu poză de profil și apasă pe numele lui din chat ca să ajungi pe " +
-                        "ecranul de informații al contactului (NU apăsa pe poză). Rămâi acolo " +
-                        "nemișcat — captura se face automat la final de numărătoare."
-                )
-                .setPositiveButton("OK") { _, _ -> service.startCalibrationCapture() }
-                .setNegativeButton("Renunță", null)
-                .show()
-        }
-
-        binding.exportContactsButton.setOnClickListener {
-            if (!hasContactsPermission()) {
-                permissions.launch(arrayOf(
-                    Manifest.permission.READ_CONTACTS,
-                    Manifest.permission.WRITE_CONTACTS
-                ))
-                return@setOnClickListener
-            }
-            exportContactsCsv()
-        }
-
-        binding.importPhotosButton.setOnClickListener {
-            if (!hasContactsPermission()) {
-                permissions.launch(arrayOf(
-                    Manifest.permission.READ_CONTACTS,
-                    Manifest.permission.WRITE_CONTACTS
-                ))
-                return@setOnClickListener
-            }
-            pickPhotosFolder.launch(null)
-        }
-
         binding.webSyncButton.setOnClickListener {
-            if (!hasContactsPermission()) {
+            if (hasContactsPermission()) {
+                startActivity(Intent(this, WebSyncActivity::class.java))
+            } else {
                 permissions.launch(arrayOf(
                     Manifest.permission.READ_CONTACTS,
                     Manifest.permission.WRITE_CONTACTS
                 ))
-                return@setOnClickListener
             }
-            startActivity(Intent(this, WebSyncActivity::class.java))
-        }
-    }
-
-    private fun importPhotosFromFolder(treeUri: android.net.Uri) {
-        val folder = DocumentFile.fromTreeUri(this, treeUri)
-        if (folder == null || !folder.isDirectory) {
-            Toast.makeText(this, "Nu am putut deschide folderul.", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        val repo = ContactRepository(this)
-        val contacts = repo.loadContacts()
-        val byPhone = HashMap<String, MutableList<Long>>()
-        for (c in contacts) {
-            byPhone.getOrPut(repo.normalize(c.phone)) { mutableListOf() }.add(c.contactId)
-        }
-
-        val files = folder.listFiles().filter {
-            it.isFile && (it.name?.endsWith(".jpg", ignoreCase = true) == true ||
-                it.name?.endsWith(".jpeg", ignoreCase = true) == true ||
-                it.name?.endsWith(".png", ignoreCase = true) == true)
-        }
-
-        logLines.clear()
-        binding.results.text = ""
-        appendLog("Import: ${files.size} fișiere găsite în folder")
-
-        var updated = 0
-        var skipped = 0
-        for (file in files) {
-            val rawName = file.name.orEmpty().substringBeforeLast('.')
-            val phone = repo.normalize(rawName)
-            val contactIds = byPhone[phone]
-
-            if (contactIds.isNullOrEmpty()) {
-                appendLog("[$rawName]: niciun contact cu acest număr, sărit")
-                skipped++
-                continue
-            }
-
-            try {
-                val bytes = contentResolver.openInputStream(file.uri)?.use { it.readBytes() }
-                if (bytes == null || bytes.size < 500) {
-                    appendLog("[$rawName]: fișier gol sau invalid, sărit")
-                    skipped++
-                    continue
-                }
-                for (contactId in contactIds) {
-                    repo.setPhoto(contactId, bytes)
-                }
-                appendLog("[$rawName]: poză salvată (${contactIds.size} contact(e))")
-                updated++
-            } catch (e: Exception) {
-                appendLog("[$rawName]: eroare — ${e.message}")
-                skipped++
-            }
-        }
-
-        binding.status.text = "Import terminat. Actualizate: $updated · Omise: $skipped"
-    }
-
-    private fun exportContactsCsv() {
-        val repo = ContactRepository(this)
-        val contacts = repo.loadContacts()
-        if (contacts.isEmpty()) {
-            Toast.makeText(this, "Nu există contacte cu număr de telefon.", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        val csv = StringBuilder("name,phone\n")
-        for (c in contacts) {
-            val escapedName = "\"" + c.name.replace("\"", "\"\"") + "\""
-            val phone = repo.normalize(c.phone)
-            csv.append(escapedName).append(',').append(phone).append('\n')
-        }
-
-        val file = File(cacheDir, "contacte_whatsapp_sync.csv")
-        file.writeText(csv.toString())
-
-        val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
-        val shareIntent = Intent(Intent.ACTION_SEND).apply {
-            type = "text/csv"
-            putExtra(Intent.EXTRA_STREAM, uri)
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
-        startActivity(Intent.createChooser(shareIntent, "Trimite lista de contacte"))
-    }
-
-    override fun onResume() {
-        super.onResume()
-        // Listener is kept registered across onPause/onResume (only cleared
-        // in onDestroy) because the sync flow spends nearly all its time
-        // with WhatsApp in the foreground and this activity backgrounded —
-        // unregistering on pause meant the log went silent the instant
-        // WhatsApp opened for the first contact.
-        val service = WhatsAppAccessibilityService.instance
-        service?.listener = this
-        binding.status.text = if (service != null) {
-            "Accesibilitatea este activă. Poți porni sincronizarea."
-        } else {
-            "Serviciul de accesibilitate nu este activ. Apasă butonul 1."
-        }
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        val service = WhatsAppAccessibilityService.instance
-        if (service?.listener === this) service.listener = null
-    }
-
-    override fun onProgress(processed: Int, total: Int, updated: Int, skipped: Int) {
-        runOnUiThread {
-            binding.status.text = "Sincronizare: $processed/$total · Actualizate: $updated · Omise: $skipped"
-        }
-    }
-
-    override fun onFinished(updated: Int, skipped: Int, total: Int) {
-        runOnUiThread {
-            binding.status.text = if (total > 0) {
-                "Terminat. Actualizate: $updated · Omise: $skipped · Total: $total"
-            } else {
-                "Nu există contacte cu număr de telefon valid."
-            }
-        }
-    }
-
-    override fun onCalibrationCaptured() {
-        runOnUiThread {
-            startActivity(Intent(this, CalibrationActivity::class.java))
-        }
-    }
-
-    override fun onLog(message: String) {
-        runOnUiThread { appendLog(message) }
-    }
-
-    private fun appendLog(message: String) {
-        if (logLines.isNotEmpty()) logLines.append('\n')
-        logLines.append(message)
-        binding.results.text = logLines.toString()
-        binding.resultsScroll.post {
-            binding.resultsScroll.fullScroll(android.view.View.FOCUS_DOWN)
         }
     }
 

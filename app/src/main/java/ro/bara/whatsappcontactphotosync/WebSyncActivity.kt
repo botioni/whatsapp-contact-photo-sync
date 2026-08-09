@@ -34,6 +34,7 @@ class WebSyncActivity : AppCompatActivity() {
     private var missingQueue: List<String> = emptyList()
     private var missingIndex = 0
     private var waitingForMissingLoad = false
+    private var missingSearchActive = false
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -63,11 +64,19 @@ class WebSyncActivity : AppCompatActivity() {
 
         binding.runExistingButton.setOnClickListener {
             appendLog("Pornesc extragerea din conversațiile existente...")
-            binding.webView.evaluateJavascript(EXISTING_CHATS_SCRIPT, null)
+            binding.webView.evaluateJavascript("window.__waStop = false;$EXISTING_CHATS_SCRIPT", null)
         }
 
         binding.runMissingButton.setOnClickListener {
             startMissingSearch()
+        }
+
+        binding.stopButton.setOnClickListener {
+            binding.webView.evaluateJavascript("window.__waStop = true;", null)
+            missingSearchActive = false
+            waitingForMissingLoad = false
+            main.removeCallbacksAndMessages(null)
+            appendLog("Oprit de utilizator.")
         }
     }
 
@@ -75,13 +84,16 @@ class WebSyncActivity : AppCompatActivity() {
         val contacts = repo.loadContacts()
         missingQueue = contacts.map { repo.normalize(it.phone) }.filter { it.length >= 7 }.distinct()
         missingIndex = 0
+        missingSearchActive = true
         appendLog("Caut ${missingQueue.size} numere (inclusiv fără conversație existentă)...")
         processNextMissing()
     }
 
     private fun processNextMissing() {
+        if (!missingSearchActive) return
         if (missingIndex >= missingQueue.size) {
             appendLog("Gata căutarea. Actualizate: $updated · Omise: $skipped")
+            missingSearchActive = false
             return
         }
         val phone = missingQueue[missingIndex++]
@@ -91,6 +103,7 @@ class WebSyncActivity : AppCompatActivity() {
     }
 
     private fun extractCurrentChat() {
+        if (!missingSearchActive) return
         binding.webView.evaluateJavascript(EXTRACT_CURRENT_SCRIPT, null)
         main.postDelayed({ processNextMissing() }, 5000)
     }
@@ -241,6 +254,7 @@ $JS_HELPERS
   AndroidBridge.log('Găsite ' + allCells.length + ' conversații.');
 
   for (let i=0;i<allCells.length;i++){
+    if (window.__waStop) { AndroidBridge.log('Oprit.'); break; }
     const cell = allCells[i];
     const titleEl = cell.querySelector('span[dir="auto"][title]');
     const name = titleEl ? titleEl.getAttribute('title') : '(?)';
