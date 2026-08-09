@@ -206,22 +206,19 @@ class WhatsAppAccessibilityService : AccessibilityService() {
         hb.close()
         if (hwBitmap == null) return null
 
-        // Both hwBitmap.copy(ARGB_8888, ...) and drawing it through a Canvas
-        // came back solid black on this device — confirmed by testing, not
-        // just theory. Bitmap.createBitmap(source, x, y, w, h) is what the
-        // very first version of this app used (no manual conversion at all)
-        // and it produced a real, usable photo, so use that same path here.
-        //
-        // Important: requesting the *exact* same width/height as the source
-        // makes Android just hand back the original HARDWARE bitmap
-        // unchanged instead of creating a real copy — the original code
-        // never hit this because it always cropped a smaller sub-region.
-        // Trim 2px so a genuine conversion always happens.
-        val w = (hwBitmap.width - 2).coerceAtLeast(1)
-        val h = (hwBitmap.height - 2).coerceAtLeast(1)
-        val out = Bitmap.createBitmap(hwBitmap, 0, 0, w, h)
+        // copy(ARGB_8888), Canvas rendering, and createBitmap() all produced
+        // solid black (or an unsupported-config error) on this device.
+        // Bitmap.compress() has explicitly supported Config.HARDWARE bitmaps
+        // since API 30 (our minSdk) — it's the one conversion path Android
+        // guarantees works, so compress straight to PNG bytes and decode
+        // them back into a normal, fully software-backed bitmap.
+        val buffer = ByteArrayOutputStream()
+        val ok = hwBitmap.compress(Bitmap.CompressFormat.PNG, 100, buffer)
         hwBitmap.recycle()
-        return out
+        if (!ok) return null
+
+        val bytes = buffer.toByteArray()
+        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
     }
 
     private fun averageBrightness(bitmap: Bitmap): Int {
