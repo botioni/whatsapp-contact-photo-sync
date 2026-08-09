@@ -576,13 +576,16 @@ $JS_HELPERS
 (async function(){
 $JS_HELPERS
   try {
+    const p0 = window.__waCurrentPhone || '';
+    AndroidBridge.log('[' + p0 + '] pas 1: aștept filtrarea listei...');
     const changed = await waitFor(() => {
       const sig = listSignature();
       return sig !== window.__waBaseline ? sig : null;
     }, 7000, 200);
-    if(!changed){ AndroidBridge.searchFailed(window.__waCurrentPhone || ''); return; }
+    if(!changed){ AndroidBridge.log('[' + p0 + '] EȘEC pas 1: lista nu s-a filtrat'); AndroidBridge.searchFailed(p0); return; }
+    AndroidBridge.log('[' + p0 + '] pas 1 OK: ' + changed);
     const cell = document.querySelector('#side [data-testid="cell-frame-container"]');
-    if(!cell){ AndroidBridge.notOnWhatsapp(window.__waCurrentPhone || ''); return; }
+    if(!cell){ AndroidBridge.log('[' + p0 + '] fără rezultat în listă'); AndroidBridge.notOnWhatsapp(p0); return; }
 
     // The conversation header is a persistent DOM node reused across chats —
     // it exists from the very first chat opened in the session onward, so
@@ -592,22 +595,28 @@ $JS_HELPERS
     const headerBefore = findConvHeader();
     const headerBeforeText = headerBefore ? headerBefore.innerText : '';
     fullClick(cell);
+    AndroidBridge.log('[' + p0 + '] pas 2: am dat click pe rezultat, aștept antetul...');
     const convHeader = await waitFor(() => {
       const h = findConvHeader();
       return (h && h.innerText.trim().length>0 && h.innerText !== headerBeforeText) ? h : null;
     }, 6000, 200);
-    if(!convHeader){ AndroidBridge.searchFailed(window.__waCurrentPhone || ''); return; }
+    if(!convHeader){ AndroidBridge.log('[' + p0 + '] EȘEC pas 2: antetul nu s-a schimbat (era: "' + headerBeforeText.slice(0,30) + '")'); AndroidBridge.searchFailed(p0); return; }
+    AndroidBridge.log('[' + p0 + '] pas 2 OK: ' + convHeader.innerText.split('\n')[0]);
     fullClick(findProfileButton(convHeader));
+    AndroidBridge.log('[' + p0 + '] pas 3: am dat click pe profil, aștept panoul...');
     const panel = await waitFor(() => {
       const p = document.querySelector('[data-testid="drawer-right"]');
       return (p && p.innerText.trim().length>0) ? p : null;
     }, 4000);
-    if(!panel){ AndroidBridge.searchFailed(window.__waCurrentPhone || ''); closeOverlay(); return; }
+    if(!panel){ AndroidBridge.log('[' + p0 + '] EȘEC pas 3: panoul de info nu s-a deschis'); AndroidBridge.searchFailed(p0); closeOverlay(); return; }
+    AndroidBridge.log('[' + p0 + '] pas 3 OK: panou deschis');
     const phoneText = findPhoneInPanel();
     const phone = phoneText ? sanitizePhone(phoneText) : null;
-    if(!phone){ AndroidBridge.searchFailed(window.__waCurrentPhone || ''); closeOverlay(); return; }
+    if(!phone){ AndroidBridge.log('[' + p0 + '] EȘEC pas 4: nu am găsit numărul în panou (text: "' + panel.innerText.slice(0,60).replace(/\n/g,' ') + '")'); AndroidBridge.searchFailed(p0); closeOverlay(); return; }
+    AndroidBridge.log('[' + p0 + '] pas 4 OK: numărul din panou = ' + phone);
     const url = await waitFor(findAvatarUrl, 3500, 250);
-    if(!url){ AndroidBridge.noPhoto(phone); closeOverlay(); return; }
+    if(!url){ AndroidBridge.log('[' + p0 + '] pas 5: fără poză găsită'); AndroidBridge.noPhoto(phone); closeOverlay(); return; }
+    AndroidBridge.log('[' + p0 + '] pas 5 OK: poză găsită, salvez...');
     const b64 = await toBase64(url);
     AndroidBridge.savePhoto(phone, b64);
     closeOverlay();
