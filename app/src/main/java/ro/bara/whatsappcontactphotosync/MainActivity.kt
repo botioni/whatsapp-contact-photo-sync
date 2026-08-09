@@ -75,6 +75,11 @@ class MainActivity : AppCompatActivity(), SyncListener {
 
     override fun onResume() {
         super.onResume()
+        // Listener is kept registered across onPause/onResume (only cleared
+        // in onDestroy) because the sync flow spends nearly all its time
+        // with WhatsApp in the foreground and this activity backgrounded —
+        // unregistering on pause meant the log went silent the instant
+        // WhatsApp opened for the first contact.
         val service = WhatsAppAccessibilityService.instance
         service?.listener = this
         binding.status.text = if (service != null) {
@@ -84,8 +89,8 @@ class MainActivity : AppCompatActivity(), SyncListener {
         }
     }
 
-    override fun onPause() {
-        super.onPause()
+    override fun onDestroy() {
+        super.onDestroy()
         val service = WhatsAppAccessibilityService.instance
         if (service?.listener === this) service.listener = null
     }
