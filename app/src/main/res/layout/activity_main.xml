@@ -64,6 +64,22 @@
             android:layout_marginTop="10dp"
             android:text="Calibrează captura (opțional)"/>
 
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/exportContactsButton"
+            style="@style/Widget.Sync.Button.Secondary"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:text="Exportă lista de contacte (CSV)"/>
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/importPhotosButton"
+            style="@style/Widget.Sync.Button.Primary"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:text="Importă poze din folder"/>
+
         <com.google.android.material.textfield.TextInputLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

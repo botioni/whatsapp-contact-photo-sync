@@ -9,11 +9,20 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.FileProvider
+import androidx.documentfile.provider.DocumentFile
 import ro.bara.whatsappcontactphotosync.databinding.ActivityMainBinding
+import java.io.File
 
 class MainActivity : AppCompatActivity(), SyncListener {
     private lateinit var binding: ActivityMainBinding
     private val logLines = StringBuilder()
+
+    private val pickPhotosFolder = registerForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri != null) importPhotosFromFolder(uri)
+    }
 
     private val permissions = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -91,6 +100,113 @@ class MainActivity : AppCompatActivity(), SyncListener {
                 .setNegativeButton("Renunță", null)
                 .show()
         }
+
+        binding.exportContactsButton.setOnClickListener {
+            if (!hasContactsPermission()) {
+                permissions.launch(arrayOf(
+                    Manifest.permission.READ_CONTACTS,
+                    Manifest.permission.WRITE_CONTACTS
+                ))
+                return@setOnClickListener
+            }
+            exportContactsCsv()
+        }
+
+        binding.importPhotosButton.setOnClickListener {
+            if (!hasContactsPermission()) {
+                permissions.launch(arrayOf(
+                    Manifest.permission.READ_CONTACTS,
+                    Manifest.permission.WRITE_CONTACTS
+                ))
+                return@setOnClickListener
+            }
+            pickPhotosFolder.launch(null)
+        }
+    }
+
+    private fun importPhotosFromFolder(treeUri: android.net.Uri) {
+        val folder = DocumentFile.fromTreeUri(this, treeUri)
+        if (folder == null || !folder.isDirectory) {
+            Toast.makeText(this, "Nu am putut deschide folderul.", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val repo = ContactRepository(this)
+        val contacts = repo.loadContacts()
+        val byPhone = HashMap<String, MutableList<Long>>()
+        for (c in contacts) {
+            byPhone.getOrPut(repo.normalize(c.phone)) { mutableListOf() }.add(c.contactId)
+        }
+
+        val files = folder.listFiles().filter {
+            it.isFile && (it.name?.endsWith(".jpg", ignoreCase = true) == true ||
+                it.name?.endsWith(".jpeg", ignoreCase = true) == true ||
+                it.name?.endsWith(".png", ignoreCase = true) == true)
+        }
+
+        logLines.clear()
+        binding.results.text = ""
+        appendLog("Import: ${files.size} fișiere găsite în folder")
+
+        var updated = 0
+        var skipped = 0
+        for (file in files) {
+            val rawName = file.name.orEmpty().substringBeforeLast('.')
+            val phone = repo.normalize(rawName)
+            val contactIds = byPhone[phone]
+
+            if (contactIds.isNullOrEmpty()) {
+                appendLog("[$rawName]: niciun contact cu acest număr, sărit")
+                skipped++
+                continue
+            }
+
+            try {
+                val bytes = contentResolver.openInputStream(file.uri)?.use { it.readBytes() }
+                if (bytes == null || bytes.size < 500) {
+                    appendLog("[$rawName]: fișier gol sau invalid, sărit")
+                    skipped++
+                    continue
+                }
+                for (contactId in contactIds) {
+                    repo.setPhoto(contactId, bytes)
+                }
+                appendLog("[$rawName]: poză salvată (${contactIds.size} contact(e))")
+                updated++
+            } catch (e: Exception) {
+                appendLog("[$rawName]: eroare — ${e.message}")
+                skipped++
+            }
+        }
+
+        binding.status.text = "Import terminat. Actualizate: $updated · Omise: $skipped"
+    }
+
+    private fun exportContactsCsv() {
+        val repo = ContactRepository(this)
+        val contacts = repo.loadContacts()
+        if (contacts.isEmpty()) {
+            Toast.makeText(this, "Nu există contacte cu număr de telefon.", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val csv = StringBuilder("name,phone\n")
+        for (c in contacts) {
+            val escapedName = "\"" + c.name.replace("\"", "\"\"") + "\""
+            val phone = repo.normalize(c.phone)
+            csv.append(escapedName).append(',').append(phone).append('\n')
+        }
+
+        val file = File(cacheDir, "contacte_whatsapp_sync.csv")
+        file.writeText(csv.toString())
+
+        val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+        val shareIntent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/csv"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        startActivity(Intent.createChooser(shareIntent, "Trimite lista de contacte"))
     }
 
     override fun onResume() {
@@ -138,13 +254,15 @@ class MainActivity : AppCompatActivity(), SyncListener {
     }
 
     override fun onLog(message: String) {
-        runOnUiThread {
-            if (logLines.isNotEmpty()) logLines.append('\n')
-            logLines.append(message)
-            binding.results.text = logLines.toString()
-            binding.resultsScroll.post {
-                binding.resultsScroll.fullScroll(android.view.View.FOCUS_DOWN)
-            }
+        runOnUiThread { appendLog(message) }
+    }
+
+    private fun appendLog(message: String) {
+        if (logLines.isNotEmpty()) logLines.append('\n')
+        logLines.append(message)
+        binding.results.text = logLines.toString()
+        binding.resultsScroll.post {
+            binding.resultsScroll.fullScroll(android.view.View.FOCUS_DOWN)
         }
     }
 
