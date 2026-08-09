@@ -77,6 +77,9 @@
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
                 android:textSize="12sp"
+                android:textColor="@color/text_primary"
+                app:thumbTint="@color/brand_primary"
+                app:trackTint="@color/card_stroke"
                 android:text="Doar contacte fără poză"
                 android:checked="true"/>
 

@@ -39,6 +39,7 @@ class WebSyncActivity : AppCompatActivity() {
     private var missingSearchActive = false
 
     private var loggedIn = false
+    private var debugMode = false
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -67,11 +68,15 @@ class WebSyncActivity : AppCompatActivity() {
             missingSearchActive = false
             main.removeCallbacksAndMessages(null)
             updateProgress("Oprit.", missingIndex, missingQueue.size)
+            if (missingIndex < missingQueue.size) {
+                binding.runMissingButton.text = "Continuă căutarea"
+            }
         }
 
         binding.debugToggleButton.setOnClickListener {
-            binding.logScroll.visibility =
-                if (binding.logScroll.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+            debugMode = !debugMode
+            binding.logScroll.visibility = if (debugMode) View.VISIBLE else View.GONE
+            updateWebViewVisibility()
         }
 
         binding.logoutButton.setOnClickListener {
@@ -94,15 +99,23 @@ class WebSyncActivity : AppCompatActivity() {
                 loggedIn = true
                 binding.instructionCard.visibility = View.GONE
                 binding.controlsLayout.visibility = View.VISIBLE
-                binding.webView.visibility = View.INVISIBLE
+                updateWebViewVisibility()
             } else {
                 main.postDelayed({ pollLoginState() }, 2000)
             }
         }
     }
 
+    /** The WebView is only ever visible before login (to show the linking code) or while Debug is on. */
+    private fun updateWebViewVisibility() {
+        binding.webView.visibility = if (!loggedIn || debugMode) View.VISIBLE else View.INVISIBLE
+    }
+
     private fun logout() {
         missingSearchActive = false
+        missingQueue = emptyList()
+        missingIndex = 0
+        binding.runMissingButton.text = "Caută contactele"
         main.removeCallbacksAndMessages(null)
         binding.webView.evaluateJavascript("window.__waStop = true;", null)
         CookieManager.getInstance().removeAllCookies(null)
@@ -111,7 +124,7 @@ class WebSyncActivity : AppCompatActivity() {
         loggedIn = false
         binding.controlsLayout.visibility = View.GONE
         binding.instructionCard.visibility = View.VISIBLE
-        binding.webView.visibility = View.VISIBLE
+        updateWebViewVisibility()
         binding.webView.loadUrl("https://web.whatsapp.com")
         main.postDelayed({ pollLoginState() }, 2000)
     }
@@ -127,19 +140,23 @@ class WebSyncActivity : AppCompatActivity() {
      * OS-level keystrokes go through the normal input pipeline every time.
      */
     private fun startMissingSearch() {
-        val onlyMissingPhoto = binding.onlyMissingPhotoSwitch.isChecked
-        val contacts = repo.loadContacts()
-        missingQueue = contacts
-            .filter { !onlyMissingPhoto || !it.hasPhoto }
-            .map { repo.normalize(it.phone) }
-            .filter { it.length >= 7 }
-            .distinct()
-        missingIndex = 0
-        updated = 0
-        skipped = 0
+        val resuming = missingQueue.isNotEmpty() && missingIndex < missingQueue.size
+        if (!resuming) {
+            val onlyMissingPhoto = binding.onlyMissingPhotoSwitch.isChecked
+            val contacts = repo.loadContacts()
+            missingQueue = contacts
+                .filter { !onlyMissingPhoto || !it.hasPhoto }
+                .map { repo.normalize(it.phone) }
+                .filter { it.length >= 7 }
+                .distinct()
+            missingIndex = 0
+            updated = 0
+            skipped = 0
+        }
         missingSearchActive = true
+        binding.runMissingButton.text = "Caută contactele"
         binding.webView.evaluateJavascript("window.__waStop = false;", null)
-        updateProgress("Se caută...", 0, missingQueue.size)
+        updateProgress(if (resuming) "Reiau căutarea..." else "Se caută...", missingIndex, missingQueue.size)
         processNextMissing()
     }
 
