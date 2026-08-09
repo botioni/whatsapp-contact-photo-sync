@@ -15,6 +15,7 @@ import android.webkit.WebStorage
 import android.webkit.WebViewClient
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import org.json.JSONObject
 import ro.bara.whatsappcontactphotosync.databinding.ActivityWebSyncBinding
 
 /**
@@ -43,6 +44,7 @@ class WebSyncActivity : AppCompatActivity() {
     private var missingQueue: List<String> = emptyList()
     private var missingIndex = 0
     private var missingSearchActive = false
+    private var searchGeneration = 0
 
     private var loggedIn = false
     private var debugMode = false
@@ -111,6 +113,14 @@ class WebSyncActivity : AppCompatActivity() {
 
         binding.logoutButton.setOnClickListener {
             logout()
+        }
+
+        // Deleting only makes sense when contacts that already have a photo
+        // are actually searched — "only missing photo" would filter them out.
+        binding.deleteMissingPhotoSwitch.setOnCheckedChangeListener { _, checked ->
+            if (checked && binding.onlyMissingPhotoSwitch.isChecked) {
+                binding.onlyMissingPhotoSwitch.isChecked = false
+            }
         }
     }
 
@@ -220,27 +230,45 @@ class WebSyncActivity : AppCompatActivity() {
             return
         }
         val phone = missingQueue[missingIndex++]
+        val gen = ++searchGeneration
         updateProgress("Caut...", missingIndex, missingQueue.size)
         appendLog("[$phone] (${missingIndex}/${missingQueue.size}) caut...")
         binding.webView.evaluateJavascript(FOCUS_SEARCH_SCRIPT) { result ->
-            if (!missingSearchActive) return@evaluateJavascript
-            if (result?.trim('"') != "true") {
+            if (!missingSearchActive || gen != searchGeneration) return@evaluateJavascript
+            val json = runCatching { JSONObject(result ?: "{}") }.getOrElse { JSONObject() }
+            if (!json.optBoolean("found", false)) {
                 appendLog("[$phone]: nu am găsit căsuța de căutare")
                 main.postDelayed({ processNextMissing() }, 400)
                 return@evaluateJavascript
             }
+            val baseline = json.optString("baseline", "")
             typeIntoWebView("+$phone")
-            main.postDelayed({ searchAndExtract(phone) }, 1200)
+            main.postDelayed({ searchAndExtract(phone, baseline, gen) }, 400)
         }
     }
 
-    private fun searchAndExtract(phone: String) {
-        if (!missingSearchActive) return
-        val escapedPhone = phone.replace("\\", "\\\\").replace("'", "\\'")
-        binding.webView.evaluateJavascript(
-            "window.__waCurrentPhone = '$escapedPhone';$SEARCH_RESULT_SCRIPT", null
-        )
-        main.postDelayed({ clearSearchAndNext() }, 2500)
+    /**
+     * Runs the click+extract script only after confirming the search actually
+     * filtered the list (comparing against the "before typing" signature) —
+     * without this check, a slow-to-filter search would make the code click
+     * whatever happened to be on top of the still-unfiltered list (often the
+     * Archived section), which is both wasted work and wrong data.
+     */
+    private fun searchAndExtract(phone: String, baseline: String, gen: Int) {
+        if (!missingSearchActive || gen != searchGeneration) return
+        val script =
+            "window.__waCurrentPhone = '${jsEscape(phone)}'; " +
+                "window.__waBaseline = '${jsEscape(baseline)}'; " +
+                "window.__waGen = $gen;$SEARCH_RESULT_SCRIPT"
+        binding.webView.evaluateJavascript(script, null)
+        // Safety net only — the script itself signals completion via
+        // AndroidBridge.searchDone(), which normally advances well before this.
+        main.postDelayed({ advanceIfStillCurrent(gen) }, 9000)
+    }
+
+    private fun advanceIfStillCurrent(gen: Int) {
+        if (!missingSearchActive || gen != searchGeneration) return
+        clearSearchAndNext()
     }
 
     private fun clearSearchAndNext() {
@@ -255,6 +283,8 @@ class WebSyncActivity : AppCompatActivity() {
         val events = KeyCharacterMap.load(KeyCharacterMap.VIRTUAL_KEYBOARD).getEvents(text.toCharArray())
         events?.forEach { binding.webView.dispatchKeyEvent(it) }
     }
+
+    private fun jsEscape(s: String) = s.replace("\\", "\\\\").replace("'", "\\'")
 
     private fun updateProgress(status: String, current: Int, total: Int) {
         runOnUiThread {
@@ -343,8 +373,20 @@ class WebSyncActivity : AppCompatActivity() {
         }
 
         @JavascriptInterface
+        fun searchFailed(phone: String) {
+            errorCount++
+            appendLog("[$phone]: căutarea nu s-a filtrat la timp, sărit")
+            updateStats()
+        }
+
+        @JavascriptInterface
         fun log(message: String) {
             appendLog(message)
+        }
+
+        @JavascriptInterface
+        fun searchDone(gen: Int) {
+            main.post { advanceIfStillCurrent(gen) }
         }
     }
 
@@ -431,14 +473,21 @@ function findConvHeader(){
   const headers = Array.from(document.querySelectorAll('header'));
   return headers.find(h => h.getAttribute('data-testid')!=='chatlist-header' && h.querySelector('img'));
 }
+function listSignature(){
+  const cells = document.querySelectorAll('#side [data-testid="cell-frame-container"]');
+  const names = [];
+  for (let i=0;i<Math.min(cells.length,3);i++){ names.push(cells[i].innerText.split('\n')[0]); }
+  return names.join('|') + '#' + cells.length;
+}
 """
 
-        /** Clicks the search box so real Android KeyEvents land in it. */
+        /** Clicks the search box and records the list's current contents, so a later check can tell whether the search actually filtered it. */
         private val FOCUS_SEARCH_SCRIPT = """
 (function(){
+$JS_HELPERS
   const box = document.querySelector('[data-testid="chat-list-search-container"] input') ||
     document.querySelector('input[aria-label="Search or start a new chat"]');
-  if(!box) return false;
+  if(!box) return {found:false};
   const rect = box.getBoundingClientRect();
   const x = rect.left + rect.width/2, y = rect.top + rect.height/2;
   const opts = {bubbles:true, cancelable:true, clientX:x, clientY:y, view:window};
@@ -448,15 +497,26 @@ function findConvHeader(){
   box.dispatchEvent(new MouseEvent('mouseup', opts));
   box.dispatchEvent(new MouseEvent('click', opts));
   box.focus();
-  return true;
+  return {found:true, baseline: listSignature()};
 })();
 """
 
-        /** Clicks the first search result and extracts its avatar, same as an existing-chat click. */
+        /**
+         * Waits until the list's signature actually differs from the
+         * pre-typing baseline (i.e. the search really filtered it) before
+         * clicking anything. Without this, a slow-to-filter search would
+         * make the code click whatever was on top of the still-unfiltered
+         * list — usually the Archived section — instead of the real result.
+         */
         private val SEARCH_RESULT_SCRIPT = """
 (async function(){
 $JS_HELPERS
   try {
+    const changed = await waitFor(() => {
+      const sig = listSignature();
+      return sig !== window.__waBaseline ? sig : null;
+    }, 5000, 200);
+    if(!changed){ AndroidBridge.searchFailed(window.__waCurrentPhone || ''); return; }
     const cell = document.querySelector('#side [data-testid="cell-frame-container"]');
     if(!cell){ AndroidBridge.notOnWhatsapp(window.__waCurrentPhone || ''); return; }
     fullClick(cell);
@@ -478,6 +538,8 @@ $JS_HELPERS
     closeOverlay();
   } catch(e){
     AndroidBridge.log('eroare: ' + e.message);
+  } finally {
+    AndroidBridge.searchDone(window.__waGen);
   }
 })();
 """
