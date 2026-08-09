@@ -65,6 +65,13 @@ class WebSyncActivity : AppCompatActivity() {
         setContentView(binding.root)
         repo = ContactRepository(this)
 
+        // We type into WhatsApp's search box via real Android KeyEvents, not
+        // the on-screen keyboard — letting the IME pop up anyway would both
+        // be a visible annoyance and, worse, resize the WebView's viewport
+        // (adjustResize) mid-search, shifting every element's coordinates
+        // right as we're clicking them.
+        window.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN)
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
@@ -318,7 +325,7 @@ class WebSyncActivity : AppCompatActivity() {
         binding.webView.evaluateJavascript(script, null)
         // Safety net only — the script itself signals completion via
         // AndroidBridge.searchDone(), which normally advances well before this.
-        main.postDelayed({ advanceIfStillCurrent(gen) }, 9000)
+        main.postDelayed({ advanceIfStillCurrent(gen) }, 24000)
     }
 
     private fun advanceIfStillCurrent(gen: Int) {
@@ -572,7 +579,7 @@ $JS_HELPERS
     const changed = await waitFor(() => {
       const sig = listSignature();
       return sig !== window.__waBaseline ? sig : null;
-    }, 5000, 200);
+    }, 7000, 200);
     if(!changed){ AndroidBridge.searchFailed(window.__waCurrentPhone || ''); return; }
     const cell = document.querySelector('#side [data-testid="cell-frame-container"]');
     if(!cell){ AndroidBridge.notOnWhatsapp(window.__waCurrentPhone || ''); return; }
@@ -588,18 +595,18 @@ $JS_HELPERS
     const convHeader = await waitFor(() => {
       const h = findConvHeader();
       return (h && h.innerText.trim().length>0 && h.innerText !== headerBeforeText) ? h : null;
-    }, 4000, 200);
+    }, 6000, 200);
     if(!convHeader){ AndroidBridge.searchFailed(window.__waCurrentPhone || ''); return; }
     fullClick(findProfileButton(convHeader));
     const panel = await waitFor(() => {
       const p = document.querySelector('[data-testid="drawer-right"]');
       return (p && p.innerText.trim().length>0) ? p : null;
-    }, 3000);
+    }, 4000);
     if(!panel){ AndroidBridge.searchFailed(window.__waCurrentPhone || ''); closeOverlay(); return; }
     const phoneText = findPhoneInPanel();
     const phone = phoneText ? sanitizePhone(phoneText) : null;
     if(!phone){ AndroidBridge.searchFailed(window.__waCurrentPhone || ''); closeOverlay(); return; }
-    const url = await waitFor(findAvatarUrl, 2500, 250);
+    const url = await waitFor(findAvatarUrl, 3500, 250);
     if(!url){ AndroidBridge.noPhoto(phone); closeOverlay(); return; }
     const b64 = await toBase64(url);
     AndroidBridge.savePhoto(phone, b64);
