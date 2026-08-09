@@ -83,8 +83,9 @@ class MainActivity : AppCompatActivity(), SyncListener {
                 .setTitle("Calibrare captură")
                 .setMessage(
                     "Apasă OK, apoi ai 10 secunde: deschide WhatsApp, intră pe un contact " +
-                        "cu poză de profil, apasă pe avatar ca să se mărească poza și rămâi " +
-                        "nemișcat pe acel ecran. Captura se face automat la final de numărătoare."
+                        "cu poză de profil și apasă pe numele lui din chat ca să ajungi pe " +
+                        "ecranul de informații al contactului (NU apăsa pe poză). Rămâi acolo " +
+                        "nemișcat — captura se face automat la final de numărătoare."
                 )
                 .setPositiveButton("OK") { _, _ -> service.startCalibrationCapture() }
                 .setNegativeButton("Renunță", null)

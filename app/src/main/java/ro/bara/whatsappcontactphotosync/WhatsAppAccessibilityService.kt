@@ -1,11 +1,9 @@
 package ro.bara.whatsappcontactphotosync
 
 import android.accessibilityservice.AccessibilityService
-import android.accessibilityservice.GestureDescription
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.graphics.Rect
 import android.net.Uri
 import android.os.Build
 import android.os.Handler
@@ -30,8 +28,7 @@ class WhatsAppAccessibilityService : AccessibilityService() {
         @Volatile var instance: WhatsAppAccessibilityService? = null
         // Held in memory instead of round-tripping through a file — avoids
         // any disk I/O/path/decode failure between capture and the
-        // calibration screen, which previously showed up as a blank/black
-        // image with no clear cause.
+        // calibration screen.
         @Volatile var lastCalibrationBitmap: Bitmap? = null
         private const val WHATSAPP_PACKAGE = "com.whatsapp"
         private const val CONTACT_NAME_VIEW_ID = "com.whatsapp:id/conversation_contact_name"
@@ -46,16 +43,10 @@ class WhatsAppAccessibilityService : AccessibilityService() {
     private var index = 0
     private var running = false
     private var waitingForChat = false
-    private var waitingForAvatar = false
-    private var waitingForPhotoConfirm = false
-    private var waitingForFullPhoto = false
-    private var avatarOpened = false
+    private var waitingForContactInfo = false
     private var current: PhoneContact? = null
     private var updated = 0
     private var skipped = 0
-    private var avatarAttempts = 0
-    private var avatarConfirmRequestId = 0
-    private var avatarClickedAt = 0L
 
     private fun log(message: String) {
         Log.d(TAG, message)
@@ -87,49 +78,17 @@ class WhatsAppAccessibilityService : AccessibilityService() {
                 if (parent?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true) {
                     log("[${current?.name}] chat header found, opening contact info")
                     waitingForChat = false
-                    waitingForAvatar = true
-                    avatarAttempts = 0
-                    main.postDelayed({ tryClickAvatar() }, 900)
+                    waitingForContactInfo = true
+                    // WhatsApp blocks screenshots of the full-size profile
+                    // photo viewer (blacks them out, since ~2024, by design
+                    // — not something we can work around). The contact-info
+                    // screen's small avatar thumbnail is NOT protected, so
+                    // we screenshot that directly instead of tapping into
+                    // the full photo.
+                    main.postDelayed({ takeContactInfoScreenshot() }, 900)
                 }
             }
-            return
         }
-
-        if (waitingForPhotoConfirm) {
-            // WhatsApp's full-photo viewer isn't necessarily a new window —
-            // on some versions it's a same-window transition, which only
-            // fires TYPE_WINDOW_CONTENT_CHANGED, not TYPE_WINDOW_STATE_CHANGED.
-            // Waiting only for the latter meant we never confirmed the photo
-            // opened and always fell through to the timeout, even when the
-            // tap worked and a photo existed.
-            val sinceClick = android.os.SystemClock.elapsedRealtime() - avatarClickedAt
-            val isRelevantEvent = event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
-                event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
-            if (isRelevantEvent && sinceClick > 300) {
-                confirmPhotoOpened()
-            }
-        }
-    }
-
-    private fun confirmPhotoOpened() {
-        if (!waitingForPhotoConfirm) return
-        waitingForPhotoConfirm = false
-        avatarOpened = true
-        waitingForFullPhoto = true
-        log("[${current?.name}] full-size photo screen opened")
-        // Give the open transition/animation time to finish rendering the
-        // actual photo before screenshotting, otherwise we can capture a
-        // black/transitional frame.
-        main.postDelayed({ takeProfileScreenshot() }, 1100)
-    }
-
-    private fun avatarConfirmTimedOut(requestId: Int) {
-        if (!waitingForPhotoConfirm || requestId != avatarConfirmRequestId) return
-        waitingForPhotoConfirm = false
-        log("[${current?.name}] tapping avatar had no effect — likely no profile photo set, skipping")
-        skipped++
-        avatarOpened = false
-        finishCurrent()
     }
 
     fun startManualSync(limit: Int? = null) {
@@ -151,7 +110,7 @@ class WhatsAppAccessibilityService : AccessibilityService() {
     }
 
     fun startCalibrationCapture() {
-        log("Calibrare: ai 10 secunde — deschide WhatsApp, intră pe contact, apasă pe avatar și așteaptă nemișcat pe poza mare")
+        log("Calibrare: ai 10 secunde — deschide WhatsApp și intră pe ecranul de informații al unui contact cu poză (nu apăsa pe avatar, doar deschide chat-ul și intră pe numele contactului)")
         main.postDelayed({ captureForCalibration() }, 10000)
     }
 
@@ -166,26 +125,19 @@ class WhatsAppAccessibilityService : AccessibilityService() {
             object : TakeScreenshotCallback {
                 override fun onSuccess(result: ScreenshotResult) {
                     try {
-                        val bitmap = hardwareResultToBitmap(result)
-                        if (bitmap != null) {
-                            lastCalibrationBitmap?.recycle()
-                            lastCalibrationBitmap = bitmap
-                            log("Calibrare: captură reușită (${bitmap.width}x${bitmap.height})")
-                            // Brightness is just a diagnostic hint — never let
-                            // it block showing the calibration screen if it
-                            // fails for any reason.
+                        hardwareResultToBitmap(result) { bitmap ->
                             try {
-                                val avgBrightness = averageBrightness(bitmap)
-                                log("Calibrare: luminozitate medie: $avgBrightness/255")
-                                if (avgBrightness < 20) {
-                                    log("Calibrare: ecranul pare aproape complet negru — probabil nu erai încă pe poza mare când s-a făcut captura. Verifică imaginea și, dacă nu se vede poza, apasă din nou Calibrează și fii mai rapid la navigare.")
+                                if (bitmap != null) {
+                                    lastCalibrationBitmap?.recycle()
+                                    lastCalibrationBitmap = bitmap
+                                    log("Calibrare: captură reușită (${bitmap.width}x${bitmap.height})")
+                                    listener?.onCalibrationCaptured()
+                                } else {
+                                    log("Calibrare: captura a eșuat (bitmap null)")
                                 }
                             } catch (e: Exception) {
-                                log("Calibrare: nu am putut calcula luminozitatea — ${e.message}")
+                                log("Calibrare: eroare — ${e.message}")
                             }
-                            listener?.onCalibrationCaptured()
-                        } else {
-                            log("Calibrare: captura a eșuat (bitmap null)")
                         }
                     } catch (e: Exception) {
                         log("Calibrare: eroare — ${e.message}")
@@ -199,55 +151,36 @@ class WhatsAppAccessibilityService : AccessibilityService() {
         )
     }
 
-    private fun hardwareResultToBitmap(result: ScreenshotResult): Bitmap? {
+    /**
+     * Converts the screenshot's raw GPU-only HardwareBuffer into a normal,
+     * CPU-readable Bitmap via compress()+decode, which the docs guarantee
+     * works from API 30 onward.
+     */
+    private fun hardwareResultToBitmap(result: ScreenshotResult, onReady: (Bitmap?) -> Unit) {
         val hb = result.hardwareBuffer
         val cs = result.colorSpace
         val hwBitmap = Bitmap.wrapHardwareBuffer(hb, cs)
         hb.close()
-        if (hwBitmap == null) return null
-
-        // copy(ARGB_8888), Canvas rendering, and createBitmap() all produced
-        // solid black (or an unsupported-config error) on this device.
-        // Bitmap.compress() has explicitly supported Config.HARDWARE bitmaps
-        // since API 30 (our minSdk) — it's the one conversion path Android
-        // guarantees works, so compress straight to PNG bytes and decode
-        // them back into a normal, fully software-backed bitmap.
+        if (hwBitmap == null) {
+            onReady(null)
+            return
+        }
         val buffer = ByteArrayOutputStream()
         val ok = hwBitmap.compress(Bitmap.CompressFormat.PNG, 100, buffer)
         hwBitmap.recycle()
-        if (!ok) return null
-
-        val bytes = buffer.toByteArray()
-        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-    }
-
-    private fun averageBrightness(bitmap: Bitmap): Int {
-        val cols = 10
-        val rows = 10
-        var total = 0L
-        var samples = 0
-        for (i in 0 until cols) {
-            for (j in 0 until rows) {
-                val x = (bitmap.width * (i + 0.5f) / cols).toInt().coerceIn(0, bitmap.width - 1)
-                val y = (bitmap.height * (j + 0.5f) / rows).toInt().coerceIn(0, bitmap.height - 1)
-                val pixel = bitmap.getPixel(x, y)
-                val r = (pixel shr 16) and 0xFF
-                val g = (pixel shr 8) and 0xFF
-                val b = pixel and 0xFF
-                total += (r + g + b) / 3
-                samples++
-            }
+        if (!ok) {
+            onReady(null)
+            return
         }
-        return (total / samples).toInt()
+        val bytes = buffer.toByteArray()
+        onReady(BitmapFactory.decodeByteArray(bytes, 0, bytes.size))
     }
 
     fun stopSync() {
         if (!running) return
         running = false
         waitingForChat = false
-        waitingForAvatar = false
-        waitingForPhotoConfirm = false
-        waitingForFullPhoto = false
+        waitingForContactInfo = false
         val processed = index
         current = null
         listener?.onFinished(updated, skipped, processed)
@@ -274,10 +207,7 @@ class WhatsAppAccessibilityService : AccessibilityService() {
         }
 
         waitingForChat = true
-        waitingForAvatar = false
-        waitingForPhotoConfirm = false
-        waitingForFullPhoto = false
-        avatarOpened = false
+        waitingForContactInfo = false
 
         log("[${current!!.name}] opening wa.me/$number")
 
@@ -308,85 +238,8 @@ class WhatsAppAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun tryClickAvatar() {
-        if (!running || !waitingForAvatar || current == null) return
-        avatarAttempts++
-
-        val root = rootInActiveWindow
-        val avatar = root?.let { findAvatarNode(it) }
-
-        if (avatar != null) {
-            val clickTarget = if (avatar.isClickable) avatar else clickableAncestor(avatar) ?: avatar
-            if (clickTarget.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
-                log("[${current?.name}] avatar clicked (attempt $avatarAttempts), waiting to see if a photo opens")
-                waitingForAvatar = false
-                waitingForPhotoConfirm = true
-                avatarClickedAt = android.os.SystemClock.elapsedRealtime()
-                avatarConfirmRequestId++
-                val requestId = avatarConfirmRequestId
-                main.postDelayed({ avatarConfirmTimedOut(requestId) }, 2000)
-                return
-            }
-        }
-
-        if (avatarAttempts >= 6) {
-            // Couldn't find/click the avatar to open the full-size photo.
-            // Fall back to screenshotting the contact-info screen as-is.
-            log("[${current?.name}] avatar not found after $avatarAttempts attempts, using fallback crop")
-            waitingForAvatar = false
-            waitingForFullPhoto = true
-            avatarOpened = false
-            takeProfileScreenshot()
-            return
-        }
-
-        main.postDelayed({ tryClickAvatar() }, 500)
-    }
-
-    private val avatarViewIds = listOf(
-        "com.whatsapp:id/photo_btn",
-        "com.whatsapp:id/photo",
-        "com.whatsapp:id/contact_photo",
-        "com.whatsapp:id/img"
-    )
-
-    private fun findAvatarNode(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
-        for (id in avatarViewIds) {
-            root.findAccessibilityNodeInfosByViewId(id).firstOrNull()?.let { return it }
-        }
-
-        // Fallback: the avatar is a roughly square image, larger than toolbar
-        // icons (back arrow, menu, etc.) but smaller than a full-screen photo.
-        // Pick the biggest square-ish ImageView on screen instead of the
-        // topmost one, since toolbar icons sit above the avatar and are small.
-        var best: AccessibilityNodeInfo? = null
-        var bestArea = 0
-        val bounds = Rect()
-
-        fun walk(n: AccessibilityNodeInfo?) {
-            if (n == null) return
-            if (n.className == "android.widget.ImageView") {
-                n.getBoundsInScreen(bounds)
-                val w = bounds.width()
-                val h = bounds.height()
-                val ratio = if (h == 0) 0f else w.toFloat() / h
-                val squareish = ratio in 0.75f..1.35f
-                if (squareish && w in 120..900 && h in 120..900) {
-                    val area = w * h
-                    if (area > bestArea) {
-                        bestArea = area
-                        best = n
-                    }
-                }
-            }
-            for (i in 0 until n.childCount) walk(n.getChild(i))
-        }
-        walk(root)
-        return best
-    }
-
-    private fun takeProfileScreenshot() {
-        if (!running || !waitingForFullPhoto) return
+    private fun takeContactInfoScreenshot() {
+        if (!running || !waitingForContactInfo) return
 
         if (Build.VERSION.SDK_INT < 30) {
             finishCurrent()
@@ -399,37 +252,43 @@ class WhatsAppAccessibilityService : AccessibilityService() {
             object : TakeScreenshotCallback {
                 override fun onSuccess(result: ScreenshotResult) {
                     try {
-                        val bitmap = hardwareResultToBitmap(result)
+                        hardwareResultToBitmap(result) { bitmap ->
+                            try {
+                                if (bitmap != null) {
+                                    val photo = extractAvatar(bitmap)
+                                    bitmap.recycle()
 
-                        if (bitmap != null) {
-                            val photo = extractAvatar(bitmap)
-                            bitmap.recycle()
-
-                            if (photo != null && current != null) {
-                                try {
-                                    ContactRepository(this@WhatsAppAccessibilityService)
-                                        .setPhoto(current!!.contactId, photo)
-                                    log("[${current?.name}] photo saved (${photo.size} bytes, avatarOpened=$avatarOpened)")
-                                    updated++
-                                } catch (e: Exception) {
-                                    log("[${current?.name}] setPhoto failed: ${e.message}")
+                                    if (photo != null && current != null) {
+                                        try {
+                                            ContactRepository(this@WhatsAppAccessibilityService)
+                                                .setPhoto(current!!.contactId, photo)
+                                            log("[${current?.name}] photo saved (${photo.size} bytes)")
+                                            updated++
+                                        } catch (e: Exception) {
+                                            log("[${current?.name}] setPhoto failed: ${e.message}")
+                                            skipped++
+                                        }
+                                    } else {
+                                        log("[${current?.name}] crop produced no usable photo")
+                                        skipped++
+                                    }
+                                } else {
+                                    log("[${current?.name}] screenshot bitmap was null")
                                     skipped++
                                 }
-                            } else {
-                                log("[${current?.name}] crop produced no usable photo (avatarOpened=$avatarOpened)")
+                            } catch (e: Exception) {
+                                log("[${current?.name}] unexpected error handling screenshot: ${e.message}")
                                 skipped++
                             }
-                        } else {
-                            log("[${current?.name}] screenshot bitmap was null")
-                            skipped++
+                            finishCurrent()
                         }
                     } catch (e: Exception) {
                         // Never let an unexpected error here stall the whole
                         // batch — log it, skip this contact, keep going.
                         log("[${current?.name}] unexpected error handling screenshot: ${e.message}")
                         skipped++
+                        finishCurrent()
                     }
-                    finishCurrent()
                 }
 
                 override fun onFailure(errorCode: Int) {
@@ -442,13 +301,10 @@ class WhatsAppAccessibilityService : AccessibilityService() {
     }
 
     private fun extractAvatar(screen: Bitmap): ByteArray? {
-        // We are (normally) on WhatsApp's full-screen photo viewer, opened by
-        // tapping the avatar from the contact-info screen. If the user has
-        // calibrated a crop (via "Calibrează captura" in the app), use it —
-        // it's an exact match for their device/WhatsApp version instead of a
-        // guessed percentage. Otherwise fall back to a wide centered square.
-        // If the avatar tap failed, this instead screenshots the contact-info
-        // screen with a smaller, upper-centered crop as a fallback.
+        // WhatsApp's contact-info screen shows a small round avatar near the
+        // top. If the user has calibrated a crop (via "Calibrează captura"
+        // in the app), use it — an exact match for their device/WhatsApp
+        // version. Otherwise fall back to a conservative guessed region.
         val w = screen.width
         val h = screen.height
         val left: Int
@@ -456,20 +312,12 @@ class WhatsAppAccessibilityService : AccessibilityService() {
         val right: Int
         val bottom: Int
 
-        if (avatarOpened) {
-            val calibration = CalibrationStore.load(this)
-            if (calibration != null) {
-                left = (calibration.left * w).toInt()
-                top = (calibration.top * h).toInt()
-                right = (calibration.right * w).toInt()
-                bottom = (calibration.bottom * h).toInt()
-            } else {
-                val side = (min(w, h) * 0.92f).toInt()
-                left = (w - side) / 2
-                top = ((h - side) / 2).coerceAtLeast(0)
-                right = left + side
-                bottom = top + side
-            }
+        val calibration = CalibrationStore.load(this)
+        if (calibration != null) {
+            left = (calibration.left * w).toInt()
+            top = (calibration.top * h).toInt()
+            right = (calibration.right * w).toInt()
+            bottom = (calibration.bottom * h).toInt()
         } else {
             val side = (min(w, h) * 0.48f).toInt()
             left = (w - side) / 2
@@ -491,19 +339,15 @@ class WhatsAppAccessibilityService : AccessibilityService() {
     }
 
     private fun finishCurrent() {
-        val backPresses = if (avatarOpened) 2 else 1
-        waitingForFullPhoto = false
-        avatarOpened = false
+        waitingForContactInfo = false
 
-        repeat(backPresses) { i ->
-            main.postDelayed({
-                if (running) performGlobalAction(GLOBAL_ACTION_BACK)
-            }, 300L * (i + 1))
-        }
+        main.postDelayed({
+            if (running) performGlobalAction(GLOBAL_ACTION_BACK)
+        }, 300)
 
         main.postDelayed({
             processNext()
-        }, 300L * backPresses + 500)
+        }, 800)
     }
 
     private fun findChatHeaderNode(root: AccessibilityNodeInfo, name: String): AccessibilityNodeInfo? {
