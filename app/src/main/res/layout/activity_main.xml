@@ -56,6 +56,14 @@
             android:layout_height="wrap_content"
             android:text="1. Activează accesibilitatea"/>
 
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/calibrateButton"
+            style="@style/Widget.Sync.Button.Secondary"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:text="Calibrează captura (opțional)"/>
+
         <com.google.android.material.textfield.TextInputLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

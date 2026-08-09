@@ -14,6 +14,8 @@ import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import java.io.ByteArrayOutputStream
+import java.io.File
+import java.io.FileOutputStream
 import java.util.concurrent.Executors
 import kotlin.math.min
 
@@ -21,6 +23,7 @@ interface SyncListener {
     fun onProgress(processed: Int, total: Int, updated: Int, skipped: Int)
     fun onFinished(updated: Int, skipped: Int, total: Int)
     fun onLog(message: String)
+    fun onCalibrationCaptured(filePath: String)
 }
 
 class WhatsAppAccessibilityService : AccessibilityService() {
@@ -142,6 +145,56 @@ class WhatsAppAccessibilityService : AccessibilityService() {
             return
         }
         processNext()
+    }
+
+    fun startCalibrationCapture() {
+        log("Calibrare: fac o captură a ecranului curent în 5 secunde — deschide WhatsApp și ajunge pe poza mare de profil")
+        main.postDelayed({ captureForCalibration() }, 5000)
+    }
+
+    private fun captureForCalibration() {
+        if (Build.VERSION.SDK_INT < 30) {
+            log("Calibrare: necesită Android 11+")
+            return
+        }
+        takeScreenshot(
+            android.view.Display.DEFAULT_DISPLAY,
+            mainExecutor,
+            object : TakeScreenshotCallback {
+                override fun onSuccess(result: ScreenshotResult) {
+                    try {
+                        val bitmap = hardwareResultToBitmap(result)
+                        if (bitmap != null) {
+                            val file = File(cacheDir, "calibration.png")
+                            FileOutputStream(file).use { out -> bitmap.compress(Bitmap.CompressFormat.PNG, 100, out) }
+                            bitmap.recycle()
+                            log("Calibrare: captură salvată")
+                            listener?.onCalibrationCaptured(file.absolutePath)
+                        } else {
+                            log("Calibrare: captura a eșuat (bitmap null)")
+                        }
+                    } catch (e: Exception) {
+                        log("Calibrare: eroare — ${e.message}")
+                    }
+                }
+
+                override fun onFailure(errorCode: Int) {
+                    log("Calibrare: takeScreenshot a eșuat, cod=$errorCode")
+                }
+            }
+        )
+    }
+
+    private fun hardwareResultToBitmap(result: ScreenshotResult): Bitmap? {
+        val hb = result.hardwareBuffer
+        val cs = result.colorSpace
+        val hwBitmap = Bitmap.wrapHardwareBuffer(hb, cs)
+        hb.close()
+        return hwBitmap?.let {
+            val copy = it.copy(Bitmap.Config.ARGB_8888, false)
+            it.recycle()
+            copy
+        }
     }
 
     fun stopSync() {
@@ -302,22 +355,7 @@ class WhatsAppAccessibilityService : AccessibilityService() {
             object : TakeScreenshotCallback {
                 override fun onSuccess(result: ScreenshotResult) {
                     try {
-                        val hb = result.hardwareBuffer
-                        val cs = result.colorSpace
-                        val hwBitmap = Bitmap.wrapHardwareBuffer(hb, cs)
-                        hb.close()
-
-                        // The screenshot arrives as a Config.HARDWARE bitmap,
-                        // whose pixels live in GPU memory — getPixel() and the
-                        // createBitmap crop both need real pixel access, so
-                        // convert to ARGB_8888 first. Skipping this crashed
-                        // the service on the very first photo once pixel
-                        // sampling was added.
-                        val bitmap = hwBitmap?.let {
-                            val copy = it.copy(Bitmap.Config.ARGB_8888, false)
-                            it.recycle()
-                            copy
-                        }
+                        val bitmap = hardwareResultToBitmap(result)
 
                         if (bitmap != null) {
                             val photo = extractAvatar(bitmap)
@@ -361,31 +399,44 @@ class WhatsAppAccessibilityService : AccessibilityService() {
 
     private fun extractAvatar(screen: Bitmap): ByteArray? {
         // We are (normally) on WhatsApp's full-screen photo viewer, opened by
-        // tapping the avatar from the contact-info screen. There the photo is
-        // large and roughly centered, so a wide centered square works well.
+        // tapping the avatar from the contact-info screen. If the user has
+        // calibrated a crop (via "Calibrează captura" in the app), use it —
+        // it's an exact match for their device/WhatsApp version instead of a
+        // guessed percentage. Otherwise fall back to a wide centered square.
         // If the avatar tap failed, this instead screenshots the contact-info
         // screen with a smaller, upper-centered crop as a fallback.
         val w = screen.width
         val h = screen.height
-        val side: Float
+        val left: Int
         val top: Int
+        val right: Int
+        val bottom: Int
+
         if (avatarOpened) {
-            side = min(w, h) * 0.92f
-            top = ((h - side) / 2f).toInt().coerceAtLeast(0)
+            val calibration = CalibrationStore.load(this)
+            if (calibration != null) {
+                left = (calibration.left * w).toInt()
+                top = (calibration.top * h).toInt()
+                right = (calibration.right * w).toInt()
+                bottom = (calibration.bottom * h).toInt()
+            } else {
+                val side = (min(w, h) * 0.92f).toInt()
+                left = (w - side) / 2
+                top = ((h - side) / 2).coerceAtLeast(0)
+                right = left + side
+                bottom = top + side
+            }
         } else {
-            side = min(w, h) * 0.48f
+            val side = (min(w, h) * 0.48f).toInt()
+            left = (w - side) / 2
             top = (h * 0.08f).toInt()
+            right = left + side
+            bottom = top + side
         }
-        val left = ((w - side) / 2f).toInt()
-        val bottom = min(h, top + side.toInt())
 
-        if (left < 0 || top < 0 || left + side > w || bottom <= top) return null
+        if (left < 0 || top < 0 || right > w || bottom > h || right <= left || bottom <= top) return null
 
-        val crop = Bitmap.createBitmap(
-            screen, left, top,
-            min(side.toInt(), w - left),
-            bottom - top
-        )
+        val crop = Bitmap.createBitmap(screen, left, top, right - left, bottom - top)
 
         val out = ByteArrayOutputStream()
         crop.compress(Bitmap.CompressFormat.JPEG, 92, out)

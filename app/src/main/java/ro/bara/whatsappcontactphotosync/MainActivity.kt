@@ -7,6 +7,7 @@ import android.os.Bundle
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import ro.bara.whatsappcontactphotosync.databinding.ActivityMainBinding
 
@@ -71,6 +72,24 @@ class MainActivity : AppCompatActivity(), SyncListener {
             }
             service.stopSync()
         }
+
+        binding.calibrateButton.setOnClickListener {
+            val service = WhatsAppAccessibilityService.instance
+            if (service == null) {
+                Toast.makeText(this, "Activează serviciul din Accesibilitate.", Toast.LENGTH_LONG).show()
+                return@setOnClickListener
+            }
+            AlertDialog.Builder(this)
+                .setTitle("Calibrare captură")
+                .setMessage(
+                    "Apasă OK, apoi în 5 secunde: deschide WhatsApp, intră pe un contact " +
+                        "cu poză de profil și apasă pe avatar ca să se mărească poza. " +
+                        "Ecranul se va captura automat, fără să mai faci altceva."
+                )
+                .setPositiveButton("OK") { _, _ -> service.startCalibrationCapture() }
+                .setNegativeButton("Renunță", null)
+                .show()
+        }
     }
 
     override fun onResume() {
@@ -108,6 +127,12 @@ class MainActivity : AppCompatActivity(), SyncListener {
             } else {
                 "Nu există contacte cu număr de telefon valid."
             }
+        }
+    }
+
+    override fun onCalibrationCaptured(filePath: String) {
+        runOnUiThread {
+            startActivity(Intent(this, CalibrationActivity::class.java).putExtra("path", filePath))
         }
     }
 
