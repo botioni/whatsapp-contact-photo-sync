@@ -99,7 +99,10 @@ class WhatsAppAccessibilityService : AccessibilityService() {
         avatarOpened = true
         waitingForFullPhoto = true
         log("[${current?.name}] full-size photo screen opened")
-        main.postDelayed({ takeProfileScreenshot() }, 500)
+        // Give the open transition/animation time to finish rendering the
+        // actual photo before screenshotting, otherwise we can capture a
+        // black/transitional frame.
+        main.postDelayed({ takeProfileScreenshot() }, 1100)
     }
 
     private fun avatarConfirmTimedOut(requestId: Int) {
@@ -352,12 +355,40 @@ class WhatsAppAccessibilityService : AccessibilityService() {
             bottom - top
         )
 
+        if (isNearlyBlack(crop)) {
+            crop.recycle()
+            return null
+        }
+
         val out = ByteArrayOutputStream()
         crop.compress(Bitmap.CompressFormat.JPEG, 92, out)
         crop.recycle()
 
         val bytes = out.toByteArray()
         return if (bytes.size > 2000) bytes else null
+    }
+
+    private fun isNearlyBlack(bitmap: Bitmap): Boolean {
+        // Catches captures taken mid-transition/animation (a black or near-
+        // black frame) so we skip instead of saving a useless photo.
+        val cols = 8
+        val rows = 8
+        var total = 0L
+        var samples = 0
+        for (i in 0 until cols) {
+            for (j in 0 until rows) {
+                val x = (bitmap.width * (i + 0.5f) / cols).toInt().coerceIn(0, bitmap.width - 1)
+                val y = (bitmap.height * (j + 0.5f) / rows).toInt().coerceIn(0, bitmap.height - 1)
+                val pixel = bitmap.getPixel(x, y)
+                val r = (pixel shr 16) and 0xFF
+                val g = (pixel shr 8) and 0xFF
+                val b = pixel and 0xFF
+                total += (r + g + b) / 3
+                samples++
+            }
+        }
+        val avgBrightness = total / samples
+        return avgBrightness < 12
     }
 
     private fun finishCurrent() {
