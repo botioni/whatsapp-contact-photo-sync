@@ -58,6 +58,10 @@ class ContactRepository(private val context: Context) {
             .build()
 
         context.contentResolver.applyBatch(ContactsContract.AUTHORITY, ops)
+
+        // Some OEM Contacts apps (Samsung included) cache thumbnails and don't
+        // always pick up the change immediately without an explicit notify.
+        context.contentResolver.notifyChange(ContactsContract.Contacts.CONTENT_URI, null)
     }
 
     private fun rawContactId(contactId: Long): Long {

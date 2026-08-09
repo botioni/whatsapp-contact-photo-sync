@@ -178,10 +178,14 @@ class WhatsAppAccessibilityService : AccessibilityService() {
             startActivity(intent)
             main.postDelayed({
                 if (waitingForChat) {
-                    log("[${current?.name}] timed out waiting for chat header")
+                    log("[${current?.name}] timed out waiting for chat header (probably not on WhatsApp)")
                     waitingForChat = false
                     skipped++
-                    processNext()
+                    // Clear any lingering WhatsApp dialog/screen (e.g. "this
+                    // number isn't on WhatsApp") before moving on, so it can't
+                    // be misread as part of the next contact's flow.
+                    performGlobalAction(GLOBAL_ACTION_BACK)
+                    main.postDelayed({ processNext() }, 500)
                 }
             }, 4500)
         } catch (e: Exception) {
@@ -397,13 +401,18 @@ class WhatsAppAccessibilityService : AccessibilityService() {
     }
 
     private fun AccessibilityNodeInfo.findNodeByPartialText(value: String): AccessibilityNodeInfo? {
-        val target = value.trim().lowercase()
-        if (target.isEmpty()) return null
+        // Match against whole name tokens only (e.g. "Ion" from "Ion Popescu"),
+        // never arbitrary substrings — a loose "contains either way" match used
+        // to let short, unrelated dialog texts (e.g. a stray "OK"/"Nu" button on
+        // the "this number isn't on WhatsApp" screen) false-positive as the
+        // contact header, which misfired clicks and corrupted later contacts.
+        val tokens = value.trim().lowercase().split(Regex("\\s+")).filter { it.length >= 3 }
+        if (tokens.isEmpty()) return null
         var found: AccessibilityNodeInfo? = null
         fun walk(n: AccessibilityNodeInfo?) {
             if (n == null || found != null) return
             val text = (n.text?.toString() ?: n.contentDescription?.toString())?.trim()?.lowercase()
-            if (!text.isNullOrEmpty() && (text.contains(target) || target.contains(text))) {
+            if (!text.isNullOrEmpty() && text.length >= 3 && tokens.any { it == text || text.contains(it) }) {
                 found = n
                 return
             }
