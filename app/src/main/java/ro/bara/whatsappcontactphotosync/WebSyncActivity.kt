@@ -54,10 +54,21 @@ class WebSyncActivity : AppCompatActivity() {
     @Volatile private var deleteMissingEnabled = false
     private var webViewInOverlay = false
     private var overlayPromptShown = false
+    private var manualSelection: List<String>? = null
 
     private val notificationPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { /* if denied, the sync still runs, it just won't show a notification */ }
+
+    private val pickContacts = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == RESULT_OK) {
+            val phones = result.data?.getStringArrayListExtra(ContactPickerActivity.EXTRA_SELECTED_PHONES)
+            manualSelection = phones
+            updateSelectionSummary()
+        }
+    }
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -125,6 +136,17 @@ class WebSyncActivity : AppCompatActivity() {
 
         binding.logoutButton.setOnClickListener {
             logout()
+        }
+
+        binding.pickContactsButton.setOnClickListener {
+            val intent = android.content.Intent(this, ContactPickerActivity::class.java)
+            manualSelection?.let { intent.putStringArrayListExtra(ContactPickerActivity.EXTRA_PRESELECTED_PHONES, ArrayList(it)) }
+            pickContacts.launch(intent)
+        }
+
+        binding.clearSelectionButton.setOnClickListener {
+            manualSelection = null
+            updateSelectionSummary()
         }
 
         // Deleting only makes sense when contacts that already have a photo
@@ -219,6 +241,18 @@ class WebSyncActivity : AppCompatActivity() {
         binding.webView.visibility = if (!loggedIn || debugMode) View.VISIBLE else View.INVISIBLE
     }
 
+    private fun updateSelectionSummary() {
+        val selection = manualSelection
+        binding.selectionSummaryText.text = if (selection == null) {
+            ""
+        } else {
+            "Selecție manuală activă: ${selection.size} contact(e). Comutatorul de mai sus e ignorat. " +
+                "Apasă din nou pe \"Alege contactele\" ca să schimbi sau să revii la toate contactele."
+        }
+        binding.onlyMissingPhotoSwitch.isEnabled = selection == null
+        binding.clearSelectionButton.visibility = if (selection == null) View.GONE else View.VISIBLE
+    }
+
     /** Idle: filter switch + start button. Running: just the heartbeat, progress and stop. */
     private fun setRunningUI(active: Boolean) {
         binding.setupGroup.visibility = if (active) View.GONE else View.VISIBLE
@@ -259,13 +293,17 @@ class WebSyncActivity : AppCompatActivity() {
         val resuming = missingQueue.isNotEmpty() && missingIndex < missingQueue.size
         deleteMissingEnabled = binding.deleteMissingPhotoSwitch.isChecked
         if (!resuming) {
-            val onlyMissingPhoto = binding.onlyMissingPhotoSwitch.isChecked
-            val contacts = repo.loadContacts()
-            missingQueue = contacts
-                .filter { !onlyMissingPhoto || !it.hasPhoto }
-                .map { repo.normalize(it.phone) }
-                .filter { it.length >= 7 }
-                .distinct()
+            val selection = manualSelection
+            missingQueue = if (selection != null) {
+                selection.filter { it.length >= 7 }.distinct()
+            } else {
+                val onlyMissingPhoto = binding.onlyMissingPhotoSwitch.isChecked
+                repo.loadContacts()
+                    .filter { !onlyMissingPhoto || !it.hasPhoto }
+                    .map { repo.normalize(it.phone) }
+                    .filter { it.length >= 7 }
+                    .distinct()
+            }
             missingIndex = 0
             foundCount = 0
             noPhotoCount = 0

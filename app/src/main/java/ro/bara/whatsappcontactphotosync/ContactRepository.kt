@@ -11,7 +11,8 @@ data class PhoneContact(
     val contactId: Long,
     val name: String,
     val phone: String,
-    val hasPhoto: Boolean
+    val hasPhoto: Boolean,
+    val photoThumbnailUri: String?
 )
 
 class ContactRepository(private val context: Context) {
@@ -23,7 +24,8 @@ class ContactRepository(private val context: Context) {
             Phone.CONTACT_ID,
             Phone.DISPLAY_NAME,
             Phone.NUMBER,
-            ContactsContract.Contacts.PHOTO_URI
+            ContactsContract.Contacts.PHOTO_URI,
+            ContactsContract.Contacts.PHOTO_THUMBNAIL_URI
         )
 
         context.contentResolver.query(
@@ -33,13 +35,15 @@ class ContactRepository(private val context: Context) {
             val nameIx = c.getColumnIndexOrThrow(Phone.DISPLAY_NAME)
             val numIx = c.getColumnIndexOrThrow(Phone.NUMBER)
             val photoIx = c.getColumnIndexOrThrow(ContactsContract.Contacts.PHOTO_URI)
+            val thumbIx = c.getColumnIndexOrThrow(ContactsContract.Contacts.PHOTO_THUMBNAIL_URI)
 
             while (c.moveToNext()) {
                 val id = c.getLong(idIx)
                 val name = c.getString(nameIx) ?: continue
                 val number = c.getString(numIx) ?: continue
                 val hasPhoto = !c.isNull(photoIx) && !c.getString(photoIx).isNullOrBlank()
-                if (number.isNotBlank()) out += PhoneContact(id, name, number, hasPhoto)
+                val thumb = if (c.isNull(thumbIx)) null else c.getString(thumbIx)
+                if (number.isNotBlank()) out += PhoneContact(id, name, number, hasPhoto, thumb)
             }
         }
         return out.distinctBy { it.contactId to normalize(it.phone) }

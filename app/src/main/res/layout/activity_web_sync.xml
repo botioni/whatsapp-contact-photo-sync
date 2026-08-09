@@ -86,6 +86,32 @@
                     android:text="Funcționează doar dacă \'Doar contacte fără poză\' e oprit, ca să verifice și contactele care au deja poză."/>
 
                 <com.google.android.material.button.MaterialButton
+                    android:id="@+id/pickContactsButton"
+                    style="@style/Widget.Sync.Button.Secondary"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="4dp"
+                    android:text="Alege contactele din listă"/>
+
+                <TextView
+                    android:id="@+id/selectionSummaryText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textSize="12sp"
+                    android:textColor="@color/text_secondary"
+                    android:text=""/>
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/clearSelectionButton"
+                    style="@style/Widget.Sync.Button.Chip"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="end"
+                    android:layout_marginBottom="10dp"
+                    android:visibility="gone"
+                    android:text="Anulează selecția"/>
+
+                <com.google.android.material.button.MaterialButton
                     android:id="@+id/runMissingButton"
                     style="@style/Widget.Sync.Button.Primary"
                     android:layout_width="match_parent"

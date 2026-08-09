@@ -31,6 +31,10 @@
             android:exported="false"
             android:configChanges="orientation|screenSize|keyboardHidden" />
 
+        <activity
+            android:name=".ContactPickerActivity"
+            android:exported="false" />
+
         <service
             android:name=".SyncForegroundService"
             android:exported="false"

@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@color/surface">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:padding="12dp"
+        android:gravity="center_vertical">
+
+        <TextView
+            android:id="@+id/selectionCountText"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:textSize="14sp"
+            android:textColor="@color/text_primary"
+            android:text="0 selectate"/>
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/selectAllButton"
+            style="@style/Widget.Sync.Button.Chip"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Tot"/>
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/selectNoneButton"
+            style="@style/Widget.Sync.Button.Chip"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Niciunul"/>
+    </LinearLayout>
+
+    <com.google.android.material.textfield.TextInputLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="12dp"
+        android:layout_marginEnd="12dp"
+        android:layout_marginBottom="8dp"
+        app:boxCornerRadiusTopStart="14dp"
+        app:boxCornerRadiusTopEnd="14dp"
+        app:boxCornerRadiusBottomStart="14dp"
+        app:boxCornerRadiusBottomEnd="14dp"
+        app:boxStrokeColor="@color/brand_primary"
+        app:hintTextColor="@color/text_secondary">
+
+        <com.google.android.material.textfield.TextInputEditText
+            android:id="@+id/filterInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="Caută după nume"
+            android:textColor="@color/text_primary"
+            android:textColorHint="@color/text_secondary"/>
+    </com.google.android.material.textfield.TextInputLayout>
+
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/contactsRecyclerView"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:clipToPadding="false"
+        android:paddingBottom="8dp"/>
+
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/confirmSelectionButton"
+        style="@style/Widget.Sync.Button.Primary"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_margin="12dp"
+        android:text="Confirmă selecția"/>
+</LinearLayout>
