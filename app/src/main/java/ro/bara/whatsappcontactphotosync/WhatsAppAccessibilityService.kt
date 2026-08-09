@@ -41,12 +41,14 @@ class WhatsAppAccessibilityService : AccessibilityService() {
     private var running = false
     private var waitingForChat = false
     private var waitingForAvatar = false
+    private var waitingForPhotoConfirm = false
     private var waitingForFullPhoto = false
     private var avatarOpened = false
     private var current: PhoneContact? = null
     private var updated = 0
     private var skipped = 0
     private var avatarAttempts = 0
+    private var avatarConfirmRequestId = 0
 
     private fun log(message: String) {
         Log.d(TAG, message)
@@ -83,7 +85,30 @@ class WhatsAppAccessibilityService : AccessibilityService() {
                     main.postDelayed({ tryClickAvatar() }, 900)
                 }
             }
+            return
         }
+
+        if (waitingForPhotoConfirm && event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            confirmPhotoOpened()
+        }
+    }
+
+    private fun confirmPhotoOpened() {
+        if (!waitingForPhotoConfirm) return
+        waitingForPhotoConfirm = false
+        avatarOpened = true
+        waitingForFullPhoto = true
+        log("[${current?.name}] full-size photo screen opened")
+        main.postDelayed({ takeProfileScreenshot() }, 500)
+    }
+
+    private fun avatarConfirmTimedOut(requestId: Int) {
+        if (!waitingForPhotoConfirm || requestId != avatarConfirmRequestId) return
+        waitingForPhotoConfirm = false
+        log("[${current?.name}] tapping avatar had no effect — likely no profile photo set, skipping")
+        skipped++
+        avatarOpened = false
+        finishCurrent()
     }
 
     fun startManualSync(limit: Int? = null) {
@@ -109,6 +134,7 @@ class WhatsAppAccessibilityService : AccessibilityService() {
         running = false
         waitingForChat = false
         waitingForAvatar = false
+        waitingForPhotoConfirm = false
         waitingForFullPhoto = false
         val processed = index
         current = null
@@ -137,6 +163,7 @@ class WhatsAppAccessibilityService : AccessibilityService() {
 
         waitingForChat = true
         waitingForAvatar = false
+        waitingForPhotoConfirm = false
         waitingForFullPhoto = false
         avatarOpened = false
 
@@ -175,11 +202,12 @@ class WhatsAppAccessibilityService : AccessibilityService() {
         if (avatar != null) {
             val clickTarget = if (avatar.isClickable) avatar else clickableAncestor(avatar) ?: avatar
             if (clickTarget.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
-                log("[${current?.name}] avatar clicked (attempt $avatarAttempts)")
+                log("[${current?.name}] avatar clicked (attempt $avatarAttempts), waiting to see if a photo opens")
                 waitingForAvatar = false
-                waitingForFullPhoto = true
-                avatarOpened = true
-                main.postDelayed({ takeProfileScreenshot() }, 900)
+                waitingForPhotoConfirm = true
+                avatarConfirmRequestId++
+                val requestId = avatarConfirmRequestId
+                main.postDelayed({ avatarConfirmTimedOut(requestId) }, 1600)
                 return
             }
         }

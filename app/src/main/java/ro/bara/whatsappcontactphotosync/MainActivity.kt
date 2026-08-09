@@ -30,6 +30,7 @@ class MainActivity : AppCompatActivity(), SyncListener {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        binding.buildInfo.text = "Build ${BuildConfig.VERSION_NAME}"
 
         binding.accessibilityButton.setOnClickListener {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
