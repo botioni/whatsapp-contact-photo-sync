@@ -10,7 +10,8 @@ import java.io.ByteArrayOutputStream
 data class PhoneContact(
     val contactId: Long,
     val name: String,
-    val phone: String
+    val phone: String,
+    val hasPhoto: Boolean
 )
 
 class ContactRepository(private val context: Context) {
@@ -21,7 +22,8 @@ class ContactRepository(private val context: Context) {
         val projection = arrayOf(
             Phone.CONTACT_ID,
             Phone.DISPLAY_NAME,
-            Phone.NUMBER
+            Phone.NUMBER,
+            ContactsContract.Contacts.PHOTO_URI
         )
 
         context.contentResolver.query(
@@ -30,12 +32,14 @@ class ContactRepository(private val context: Context) {
             val idIx = c.getColumnIndexOrThrow(Phone.CONTACT_ID)
             val nameIx = c.getColumnIndexOrThrow(Phone.DISPLAY_NAME)
             val numIx = c.getColumnIndexOrThrow(Phone.NUMBER)
+            val photoIx = c.getColumnIndexOrThrow(ContactsContract.Contacts.PHOTO_URI)
 
             while (c.moveToNext()) {
                 val id = c.getLong(idIx)
                 val name = c.getString(nameIx) ?: continue
                 val number = c.getString(numIx) ?: continue
-                if (number.isNotBlank()) out += PhoneContact(id, name, number)
+                val hasPhoto = !c.isNull(photoIx) && !c.getString(photoIx).isNullOrBlank()
+                if (number.isNotBlank()) out += PhoneContact(id, name, number, hasPhoto)
             }
         }
         return out.distinctBy { it.contactId to normalize(it.phone) }

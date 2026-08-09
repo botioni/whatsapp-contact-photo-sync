@@ -6,8 +6,10 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Base64
 import android.view.KeyCharacterMap
+import android.view.View
+import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
-import android.webkit.WebView
+import android.webkit.WebStorage
 import android.webkit.WebViewClient
 import androidx.appcompat.app.AppCompatActivity
 import ro.bara.whatsappcontactphotosync.databinding.ActivityWebSyncBinding
@@ -36,6 +38,8 @@ class WebSyncActivity : AppCompatActivity() {
     private var missingIndex = 0
     private var missingSearchActive = false
 
+    private var loggedIn = false
+
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -52,10 +56,7 @@ class WebSyncActivity : AppCompatActivity() {
         binding.webView.webViewClient = WebViewClient()
         binding.webView.loadUrl("https://web.whatsapp.com")
 
-        binding.runExistingButton.setOnClickListener {
-            appendLog("Pornesc extragerea din conversațiile existente...")
-            binding.webView.evaluateJavascript("window.__waStop = false;$EXISTING_CHATS_SCRIPT", null)
-        }
+        main.postDelayed({ pollLoginState() }, 2000)
 
         binding.runMissingButton.setOnClickListener {
             startMissingSearch()
@@ -65,8 +66,45 @@ class WebSyncActivity : AppCompatActivity() {
             binding.webView.evaluateJavascript("window.__waStop = true;", null)
             missingSearchActive = false
             main.removeCallbacksAndMessages(null)
-            appendLog("Oprit de utilizator.")
+            updateProgress("Oprit.", missingIndex, missingQueue.size)
         }
+
+        binding.debugToggleButton.setOnClickListener {
+            binding.logScroll.visibility =
+                if (binding.logScroll.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+        }
+
+        binding.logoutButton.setOnClickListener {
+            logout()
+        }
+    }
+
+    /** Polls until WhatsApp Web shows the chat list (i.e. this device is linked), then reveals the controls. */
+    private fun pollLoginState() {
+        if (loggedIn) return
+        binding.webView.evaluateJavascript(LOGIN_CHECK_SCRIPT) { result ->
+            if (result?.trim('"') == "true") {
+                loggedIn = true
+                binding.instructionCard.visibility = View.GONE
+                binding.controlsLayout.visibility = View.VISIBLE
+            } else {
+                main.postDelayed({ pollLoginState() }, 2000)
+            }
+        }
+    }
+
+    private fun logout() {
+        missingSearchActive = false
+        main.removeCallbacksAndMessages(null)
+        binding.webView.evaluateJavascript("window.__waStop = true;", null)
+        CookieManager.getInstance().removeAllCookies(null)
+        WebStorage.getInstance().deleteAllData()
+        binding.webView.clearCache(true)
+        loggedIn = false
+        binding.controlsLayout.visibility = View.GONE
+        binding.instructionCard.visibility = View.VISIBLE
+        binding.webView.loadUrl("https://web.whatsapp.com")
+        main.postDelayed({ pollLoginState() }, 2000)
     }
 
     /**
@@ -80,22 +118,31 @@ class WebSyncActivity : AppCompatActivity() {
      * OS-level keystrokes go through the normal input pipeline every time.
      */
     private fun startMissingSearch() {
+        val onlyMissingPhoto = binding.onlyMissingPhotoSwitch.isChecked
         val contacts = repo.loadContacts()
-        missingQueue = contacts.map { repo.normalize(it.phone) }.filter { it.length >= 7 }.distinct()
+        missingQueue = contacts
+            .filter { !onlyMissingPhoto || !it.hasPhoto }
+            .map { repo.normalize(it.phone) }
+            .filter { it.length >= 7 }
+            .distinct()
         missingIndex = 0
+        updated = 0
+        skipped = 0
         missingSearchActive = true
-        appendLog("Caut ${missingQueue.size} numere prin căsuța de căutare...")
+        binding.webView.evaluateJavascript("window.__waStop = false;", null)
+        updateProgress("Se caută...", 0, missingQueue.size)
         processNextMissing()
     }
 
     private fun processNextMissing() {
         if (!missingSearchActive) return
         if (missingIndex >= missingQueue.size) {
-            appendLog("Gata căutarea. Actualizate: $updated · Omise: $skipped")
+            updateProgress("Gata. Actualizate: $updated · Omise: $skipped", missingIndex, missingQueue.size)
             missingSearchActive = false
             return
         }
         val phone = missingQueue[missingIndex++]
+        updateProgress("Caut...", missingIndex, missingQueue.size)
         appendLog("[$phone] (${missingIndex}/${missingQueue.size}) caut...")
         binding.webView.evaluateJavascript(FOCUS_SEARCH_SCRIPT) { result ->
             if (!missingSearchActive) return@evaluateJavascript
@@ -126,6 +173,14 @@ class WebSyncActivity : AppCompatActivity() {
         binding.webView.requestFocus()
         val events = KeyCharacterMap.load(KeyCharacterMap.VIRTUAL_KEYBOARD).getEvents(text.toCharArray())
         events?.forEach { binding.webView.dispatchKeyEvent(it) }
+    }
+
+    private fun updateProgress(status: String, current: Int, total: Int) {
+        runOnUiThread {
+            binding.progressText.text = if (total > 0) "$status  ($current/$total)" else status
+            binding.progressBar.max = if (total > 0) total else 1
+            binding.progressBar.progress = current
+        }
     }
 
     private fun appendLog(message: String) {
@@ -175,7 +230,10 @@ class WebSyncActivity : AppCompatActivity() {
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
                 "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
 
-        // Shared helpers reused by both scripts below. WhatsApp Web's avatar
+        /** True once the chat list (left sidebar) is present — i.e. this device is linked. */
+        private const val LOGIN_CHECK_SCRIPT = "(function(){ return !!document.querySelector('#side'); })();"
+
+        // Shared helpers reused by the scripts below. WhatsApp Web's avatar
         // is neither a plain <img> nor a simple CSS background in all cases —
         // it can be an SVG <image> with a real CDN URL (best quality) or a
         // <div> with a base64 data-URL background (lower-res placeholder).
@@ -246,64 +304,10 @@ async function toBase64(url){
 function closeOverlay(){
   document.body.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', bubbles:true}));
 }
-async function scrollToLoadAll(maxRounds){
-  maxRounds = maxRounds || 60;
-  const listEl = document.querySelector('[data-testid="chat-list"], [aria-label][role="grid"]');
-  if(!listEl) return;
-  let last=-1;
-  for(let i=0;i<maxRounds;i++){
-    const c = document.querySelectorAll('[data-testid="cell-frame-container"]').length;
-    if(c===last) break;
-    last=c;
-    listEl.scrollTop = listEl.scrollHeight;
-    await wait(400);
-  }
-}
 function findConvHeader(){
   const headers = Array.from(document.querySelectorAll('header'));
   return headers.find(h => h.getAttribute('data-testid')!=='chatlist-header' && h.querySelector('img'));
 }
-"""
-
-        /** Iterates every existing chat in the sidebar list. */
-        private val EXISTING_CHATS_SCRIPT = """
-(async function(){
-$JS_HELPERS
-  await scrollToLoadAll();
-  const allCells = Array.from(document.querySelectorAll('[data-testid="cell-frame-container"]'));
-  AndroidBridge.log('Găsite ' + allCells.length + ' conversații.');
-
-  for (let i=0;i<allCells.length;i++){
-    if (window.__waStop) { AndroidBridge.log('Oprit.'); break; }
-    const cell = allCells[i];
-    const titleEl = cell.querySelector('span[dir="auto"][title]');
-    const name = titleEl ? titleEl.getAttribute('title') : '(?)';
-    try {
-      fullClick(cell);
-      await wait(900);
-      const convHeader = findConvHeader();
-      if(!convHeader) continue;
-      fullClick(convHeader.querySelector('span[dir="auto"]') || convHeader.querySelector('img'));
-      const panel = await waitFor(() => {
-        const p = document.querySelector('[data-testid="drawer-right"]');
-        return (p && p.innerText.trim().length>0) ? p : null;
-      }, 3000);
-      if(!panel){ closeOverlay(); await wait(250); continue; }
-      const phoneText = findPhoneInPanel();
-      const phone = phoneText ? sanitizePhone(phoneText) : null;
-      if(!phone){ closeOverlay(); await wait(250); continue; }
-      const url = await waitFor(findAvatarUrl, 2500, 250);
-      if(!url){ closeOverlay(); await wait(250); continue; }
-      const b64 = await toBase64(url);
-      AndroidBridge.savePhoto(phone, b64);
-      closeOverlay(); await wait(300);
-    } catch(e){
-      AndroidBridge.log('[' + name + ']: eroare ' + e.message);
-      closeOverlay(); await wait(250);
-    }
-  }
-  AndroidBridge.log('Gata parcurgerea conversațiilor existente.');
-})();
 """
 
         /** Clicks the search box so real Android KeyEvents land in it. */
