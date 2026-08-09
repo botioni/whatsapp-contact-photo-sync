@@ -85,6 +85,26 @@
                     android:textColor="@color/text_secondary"
                     android:text="Funcționează doar dacă \'Doar contacte fără poză\' e oprit, ca să verifice și contactele care au deja poză."/>
 
+                <com.google.android.material.switchmaterial.SwitchMaterial
+                    android:id="@+id/saveToGallerySwitch"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="4dp"
+                    android:textSize="14sp"
+                    android:textColor="@color/text_primary"
+                    app:thumbTint="@color/brand_primary"
+                    app:trackTint="@color/card_stroke"
+                    android:text="Salvează pozele și în galerie"
+                    android:checked="false"/>
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="14dp"
+                    android:textSize="12sp"
+                    android:textColor="@color/text_secondary"
+                    android:text="Pune o copie a fiecărei poze găsite în Poze/WhatsAppSync, ca să o poți alege manual de acolo (ex. pentru profile card la Samsung)."/>
+
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/pickContactsButton"
                     style="@style/Widget.Sync.Button.Secondary"

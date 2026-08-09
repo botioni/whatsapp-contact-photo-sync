@@ -1,10 +1,13 @@
 package ro.bara.whatsappcontactphotosync
 
 import android.content.ContentProviderOperation
+import android.content.ContentValues
 import android.content.Context
+import android.os.Environment
 import android.provider.ContactsContract
 import android.provider.ContactsContract.CommonDataKinds.Phone
 import android.provider.ContactsContract.CommonDataKinds.Photo
+import android.provider.MediaStore
 import java.io.ByteArrayOutputStream
 
 data class PhoneContact(
@@ -70,6 +73,27 @@ class ContactRepository(private val context: Context) {
         // Some OEM Contacts apps (Samsung included) cache thumbnails and don't
         // always pick up the change immediately without an explicit notify.
         context.contentResolver.notifyChange(ContactsContract.Contacts.CONTENT_URI, null)
+    }
+
+    /**
+     * Saves a copy of the photo into Pictures/WhatsAppSync so the user can
+     * manually pick it from Gallery for things this app can't set itself —
+     * e.g. Samsung's "profile card" cover image, which has no public API.
+     * Uses MediaStore so no extra storage permission is needed.
+     */
+    fun savePhotoToGallery(displayName: String, jpeg: ByteArray) {
+        val safeName = displayName
+            .filter { it.isLetterOrDigit() || it == ' ' || it == '_' || it == '-' }
+            .trim()
+            .ifBlank { "contact" }
+        val values = ContentValues().apply {
+            put(MediaStore.Images.Media.DISPLAY_NAME, "$safeName.jpg")
+            put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+            put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/WhatsAppSync")
+        }
+        val uri = context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+            ?: return
+        context.contentResolver.openOutputStream(uri)?.use { it.write(jpeg) }
     }
 
     fun deletePhoto(contactId: Long) {

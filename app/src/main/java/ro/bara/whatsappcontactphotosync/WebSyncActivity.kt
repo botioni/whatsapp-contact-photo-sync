@@ -52,6 +52,7 @@ class WebSyncActivity : AppCompatActivity() {
     private var loggedIn = false
     private var debugMode = false
     @Volatile private var deleteMissingEnabled = false
+    @Volatile private var saveToGalleryEnabled = false
     private var webViewInOverlay = false
     private var overlayPromptShown = false
     private var manualSelection: List<String>? = null
@@ -292,6 +293,7 @@ class WebSyncActivity : AppCompatActivity() {
     private fun startMissingSearch() {
         val resuming = missingQueue.isNotEmpty() && missingIndex < missingQueue.size
         deleteMissingEnabled = binding.deleteMissingPhotoSwitch.isChecked
+        saveToGalleryEnabled = binding.saveToGallerySwitch.isChecked
         if (!resuming) {
             val selection = manualSelection
             missingQueue = if (selection != null) {
@@ -434,7 +436,10 @@ class WebSyncActivity : AppCompatActivity() {
                     updateStats()
                     return false
                 }
-                for (m in matches) repo.setPhoto(m.contactId, bytes)
+                for (m in matches) {
+                    repo.setPhoto(m.contactId, bytes)
+                    if (saveToGalleryEnabled) repo.savePhotoToGallery(m.name, bytes)
+                }
                 foundCount++
                 appendLog("[$phone]: poză găsită și salvată (${matches.size} contact(e))")
                 updateStats()
