@@ -43,6 +43,7 @@ class WebSyncActivity : AppCompatActivity() {
 
     private var loggedIn = false
     private var debugMode = false
+    @Volatile private var deleteMissingEnabled = false
 
     private val notificationPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -180,6 +181,7 @@ class WebSyncActivity : AppCompatActivity() {
      */
     private fun startMissingSearch() {
         val resuming = missingQueue.isNotEmpty() && missingIndex < missingQueue.size
+        deleteMissingEnabled = binding.deleteMissingPhotoSwitch.isChecked
         if (!resuming) {
             val onlyMissingPhoto = binding.onlyMissingPhotoSwitch.isChecked
             val contacts = repo.loadContacts()
@@ -287,6 +289,25 @@ class WebSyncActivity : AppCompatActivity() {
                 skipped++
                 false
             }
+        }
+
+        @JavascriptInterface
+        fun noPhoto(phone: String) {
+            if (!deleteMissingEnabled) {
+                appendLog("[$phone]: fără poză pe WhatsApp")
+                skipped++
+                return
+            }
+            val normalized = repo.normalize(phone)
+            val matches = repo.loadContacts().filter { repo.normalize(it.phone) == normalized && it.hasPhoto }
+            if (matches.isEmpty()) {
+                appendLog("[$phone]: fără poză pe WhatsApp (niciun contact avea poză)")
+                skipped++
+                return
+            }
+            for (m in matches) repo.deletePhoto(m.contactId)
+            updated++
+            appendLog("[$phone]: fără poză pe WhatsApp — poza ștearsă (${matches.size} contact(e))")
         }
 
         @JavascriptInterface
@@ -419,7 +440,7 @@ $JS_HELPERS
     const phone = phoneText ? sanitizePhone(phoneText) : null;
     if(!phone){ AndroidBridge.log('nu am găsit numărul în panou'); closeOverlay(); return; }
     const url = await waitFor(findAvatarUrl, 2500, 250);
-    if(!url){ AndroidBridge.log('[' + phone + ']: fără poză'); closeOverlay(); return; }
+    if(!url){ AndroidBridge.noPhoto(phone); closeOverlay(); return; }
     const b64 = await toBase64(url);
     AndroidBridge.savePhoto(phone, b64);
     closeOverlay();

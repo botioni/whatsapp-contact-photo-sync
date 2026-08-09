@@ -57,13 +57,33 @@
                     android:id="@+id/onlyMissingPhotoSwitch"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginBottom="14dp"
+                    android:layout_marginBottom="10dp"
                     android:textSize="14sp"
                     android:textColor="@color/text_primary"
                     app:thumbTint="@color/brand_primary"
                     app:trackTint="@color/card_stroke"
                     android:text="Doar contacte fără poză"
                     android:checked="true"/>
+
+                <com.google.android.material.switchmaterial.SwitchMaterial
+                    android:id="@+id/deleteMissingPhotoSwitch"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="4dp"
+                    android:textSize="14sp"
+                    android:textColor="@color/text_primary"
+                    app:thumbTint="@color/brand_danger"
+                    app:trackTint="@color/card_stroke"
+                    android:text="Șterge poza dacă nu mai e pe WhatsApp"
+                    android:checked="false"/>
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="14dp"
+                    android:textSize="12sp"
+                    android:textColor="@color/text_secondary"
+                    android:text="Funcționează doar dacă \'Doar contacte fără poză\' e oprit, ca să verifice și contactele care au deja poză."/>
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/runMissingButton"

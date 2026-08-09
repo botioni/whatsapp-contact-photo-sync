@@ -68,6 +68,15 @@ class ContactRepository(private val context: Context) {
         context.contentResolver.notifyChange(ContactsContract.Contacts.CONTENT_URI, null)
     }
 
+    fun deletePhoto(contactId: Long) {
+        context.contentResolver.delete(
+            ContactsContract.Data.CONTENT_URI,
+            "${ContactsContract.Data.CONTACT_ID}=? AND ${ContactsContract.Data.MIMETYPE}=?",
+            arrayOf(contactId.toString(), Photo.CONTENT_ITEM_TYPE)
+        )
+        context.contentResolver.notifyChange(ContactsContract.Contacts.CONTENT_URI, null)
+    }
+
     private fun rawContactId(contactId: Long): Long {
         context.contentResolver.query(
             ContactsContract.RawContacts.CONTENT_URI,
