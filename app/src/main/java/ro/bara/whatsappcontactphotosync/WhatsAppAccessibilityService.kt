@@ -288,31 +288,50 @@ class WhatsAppAccessibilityService : AccessibilityService() {
             mainExecutor,
             object : TakeScreenshotCallback {
                 override fun onSuccess(result: ScreenshotResult) {
-                    val hb = result.hardwareBuffer
-                    val cs = result.colorSpace
-                    val bitmap = Bitmap.wrapHardwareBuffer(hb, cs)
-                    hb.close()
+                    try {
+                        val hb = result.hardwareBuffer
+                        val cs = result.colorSpace
+                        val hwBitmap = Bitmap.wrapHardwareBuffer(hb, cs)
+                        hb.close()
 
-                    if (bitmap != null) {
-                        val photo = extractAvatar(bitmap)
-                        bitmap.recycle()
+                        // The screenshot arrives as a Config.HARDWARE bitmap,
+                        // whose pixels live in GPU memory — getPixel() and the
+                        // createBitmap crop both need real pixel access, so
+                        // convert to ARGB_8888 first. Skipping this crashed
+                        // the service on the very first photo once pixel
+                        // sampling was added.
+                        val bitmap = hwBitmap?.let {
+                            val copy = it.copy(Bitmap.Config.ARGB_8888, false)
+                            it.recycle()
+                            copy
+                        }
 
-                        if (photo != null && current != null) {
-                            try {
-                                ContactRepository(this@WhatsAppAccessibilityService)
-                                    .setPhoto(current!!.contactId, photo)
-                                log("[${current?.name}] photo saved (${photo.size} bytes, avatarOpened=$avatarOpened)")
-                                updated++
-                            } catch (e: Exception) {
-                                log("[${current?.name}] setPhoto failed: ${e.message}")
+                        if (bitmap != null) {
+                            val photo = extractAvatar(bitmap)
+                            bitmap.recycle()
+
+                            if (photo != null && current != null) {
+                                try {
+                                    ContactRepository(this@WhatsAppAccessibilityService)
+                                        .setPhoto(current!!.contactId, photo)
+                                    log("[${current?.name}] photo saved (${photo.size} bytes, avatarOpened=$avatarOpened)")
+                                    updated++
+                                } catch (e: Exception) {
+                                    log("[${current?.name}] setPhoto failed: ${e.message}")
+                                    skipped++
+                                }
+                            } else {
+                                log("[${current?.name}] crop produced no usable photo (avatarOpened=$avatarOpened)")
                                 skipped++
                             }
                         } else {
-                            log("[${current?.name}] crop produced no usable photo (avatarOpened=$avatarOpened)")
+                            log("[${current?.name}] screenshot bitmap was null")
                             skipped++
                         }
-                    } else {
-                        log("[${current?.name}] screenshot bitmap was null")
+                    } catch (e: Exception) {
+                        // Never let an unexpected error here stall the whole
+                        // batch — log it, skip this contact, keep going.
+                        log("[${current?.name}] unexpected error handling screenshot: ${e.message}")
                         skipped++
                     }
                     finishCurrent()
