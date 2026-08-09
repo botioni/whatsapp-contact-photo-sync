@@ -1,6 +1,5 @@
 package ro.bara.whatsappcontactphotosync
 
-import android.graphics.BitmapFactory
 import android.os.Bundle
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -14,10 +13,9 @@ class CalibrationActivity : AppCompatActivity() {
         binding = ActivityCalibrationBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        val path = intent.getStringExtra("path")
-        val bitmap = path?.let { BitmapFactory.decodeFile(it) }
-        if (bitmap == null) {
-            Toast.makeText(this, "Nu am putut încărca captura.", Toast.LENGTH_SHORT).show()
+        val bitmap = WhatsAppAccessibilityService.lastCalibrationBitmap
+        if (bitmap == null || bitmap.isRecycled) {
+            Toast.makeText(this, "Nu am nicio captură disponibilă. Apasă din nou Calibrează.", Toast.LENGTH_LONG).show()
             finish()
             return
         }

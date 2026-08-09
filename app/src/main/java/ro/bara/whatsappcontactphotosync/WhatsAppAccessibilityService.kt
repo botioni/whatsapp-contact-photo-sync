@@ -14,8 +14,6 @@ import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import java.io.ByteArrayOutputStream
-import java.io.File
-import java.io.FileOutputStream
 import java.util.concurrent.Executors
 import kotlin.math.min
 
@@ -23,13 +21,18 @@ interface SyncListener {
     fun onProgress(processed: Int, total: Int, updated: Int, skipped: Int)
     fun onFinished(updated: Int, skipped: Int, total: Int)
     fun onLog(message: String)
-    fun onCalibrationCaptured(filePath: String)
+    fun onCalibrationCaptured()
 }
 
 class WhatsAppAccessibilityService : AccessibilityService() {
 
     companion object {
         @Volatile var instance: WhatsAppAccessibilityService? = null
+        // Held in memory instead of round-tripping through a file — avoids
+        // any disk I/O/path/decode failure between capture and the
+        // calibration screen, which previously showed up as a blank/black
+        // image with no clear cause.
+        @Volatile var lastCalibrationBitmap: Bitmap? = null
         private const val WHATSAPP_PACKAGE = "com.whatsapp"
         private const val CONTACT_NAME_VIEW_ID = "com.whatsapp:id/conversation_contact_name"
         private const val TAG = "WaSync"
@@ -166,14 +169,13 @@ class WhatsAppAccessibilityService : AccessibilityService() {
                         val bitmap = hardwareResultToBitmap(result)
                         if (bitmap != null) {
                             val avgBrightness = averageBrightness(bitmap)
-                            val file = File(cacheDir, "calibration.png")
-                            FileOutputStream(file).use { out -> bitmap.compress(Bitmap.CompressFormat.PNG, 100, out) }
-                            bitmap.recycle()
-                            log("Calibrare: captură salvată (luminozitate medie: $avgBrightness/255)")
+                            lastCalibrationBitmap?.recycle()
+                            lastCalibrationBitmap = bitmap
+                            log("Calibrare: captură reușită (${bitmap.width}x${bitmap.height}, luminozitate medie: $avgBrightness/255)")
                             if (avgBrightness < 20) {
                                 log("Calibrare: ecranul pare aproape complet negru — probabil nu erai încă pe poza mare când s-a făcut captura. Verifică imaginea și, dacă nu se vede poza, apasă din nou Calibrează și fii mai rapid la navigare.")
                             }
-                            listener?.onCalibrationCaptured(file.absolutePath)
+                            listener?.onCalibrationCaptured()
                         } else {
                             log("Calibrare: captura a eșuat (bitmap null)")
                         }

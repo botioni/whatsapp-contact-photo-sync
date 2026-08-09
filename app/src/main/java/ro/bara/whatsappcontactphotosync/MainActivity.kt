@@ -130,9 +130,9 @@ class MainActivity : AppCompatActivity(), SyncListener {
         }
     }
 
-    override fun onCalibrationCaptured(filePath: String) {
+    override fun onCalibrationCaptured() {
         runOnUiThread {
-            startActivity(Intent(this, CalibrationActivity::class.java).putExtra("path", filePath))
+            startActivity(Intent(this, CalibrationActivity::class.java))
         }
     }
 
