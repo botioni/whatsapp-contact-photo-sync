@@ -16,12 +16,18 @@ import androidx.core.app.NotificationCompat
  * user on another app) by holding a foreground-service notification. The
  * WebView driving the actual sync still lives in WebSyncActivity — this
  * service only prevents the OS from freezing/killing that process and
- * shows progress so the user doesn't have to keep the screen open.
+ * shows progress (and running stats) so the user doesn't have to keep the
+ * screen open.
  *
  * Note: swiping the app away from Recents still destroys the Activity (and
  * its WebView) — only pressing Home or locking the screen keeps it alive.
  */
 class SyncForegroundService : Service() {
+
+    private var lastStatus = "Se pregătește..."
+    private var lastCurrent = 0
+    private var lastTotal = 0
+    private var lastStats = ""
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -29,7 +35,7 @@ class SyncForegroundService : Service() {
         super.onCreate()
         createChannel()
         instance = this
-        startForeground(NOTIFICATION_ID, buildNotification("Se pregătește...", 0, 0))
+        startForeground(NOTIFICATION_ID, buildNotification())
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -45,7 +51,11 @@ class SyncForegroundService : Service() {
         super.onDestroy()
     }
 
-    private fun buildNotification(status: String, current: Int, total: Int): Notification {
+    private fun refreshNotification() {
+        getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification())
+    }
+
+    private fun buildNotification(): Notification {
         val openIntent = Intent(this, WebSyncActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
@@ -59,17 +69,21 @@ class SyncForegroundService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        val progressLine = if (lastTotal > 0) "$lastStatus ($lastCurrent/$lastTotal)" else lastStatus
+        val fullText = if (lastStats.isNotEmpty()) "$progressLine\n$lastStats" else progressLine
+
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_notify_sync)
             .setContentTitle("Sincronizare poze WhatsApp")
-            .setContentText(if (total > 0) "$status ($current/$total)" else status)
+            .setContentText(progressLine)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(fullText))
             .setContentIntent(contentPendingIntent)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .addAction(0, "Oprește", stopPendingIntent)
 
-        if (total > 0) {
-            builder.setProgress(total, current, false)
+        if (lastTotal > 0) {
+            builder.setProgress(lastTotal, lastCurrent, false)
         }
         return builder.build()
     }
@@ -102,10 +116,18 @@ class SyncForegroundService : Service() {
             }
         }
 
-        fun updateProgress(context: Context, status: String, current: Int, total: Int) {
+        fun updateProgress(status: String, current: Int, total: Int) {
             val svc = instance ?: return
-            context.getSystemService(NotificationManager::class.java)
-                .notify(NOTIFICATION_ID, svc.buildNotification(status, current, total))
+            svc.lastStatus = status
+            svc.lastCurrent = current
+            svc.lastTotal = total
+            svc.refreshNotification()
+        }
+
+        fun updateStats(stats: String) {
+            val svc = instance ?: return
+            svc.lastStats = stats
+            svc.refreshNotification()
         }
 
         fun stop(context: Context) {

@@ -34,8 +34,11 @@ class WebSyncActivity : AppCompatActivity() {
     private lateinit var repo: ContactRepository
     private val main = Handler(Looper.getMainLooper())
     private val logLines = StringBuilder()
-    private var updated = 0
-    private var skipped = 0
+    private var foundCount = 0
+    private var noPhotoCount = 0
+    private var deletedCount = 0
+    private var notOnWhatsappCount = 0
+    private var errorCount = 0
 
     private var missingQueue: List<String> = emptyList()
     private var missingIndex = 0
@@ -191,8 +194,12 @@ class WebSyncActivity : AppCompatActivity() {
                 .filter { it.length >= 7 }
                 .distinct()
             missingIndex = 0
-            updated = 0
-            skipped = 0
+            foundCount = 0
+            noPhotoCount = 0
+            deletedCount = 0
+            notOnWhatsappCount = 0
+            errorCount = 0
+            updateStats()
         }
         missingSearchActive = true
         binding.runMissingButton.text = "Caută contactele"
@@ -206,7 +213,7 @@ class WebSyncActivity : AppCompatActivity() {
     private fun processNextMissing() {
         if (!missingSearchActive) return
         if (missingIndex >= missingQueue.size) {
-            updateProgress("Gata. Actualizate: $updated · Omise: $skipped", missingIndex, missingQueue.size)
+            updateProgress("Gata.", missingIndex, missingQueue.size)
             missingSearchActive = false
             SyncForegroundService.stop(this)
             setRunningUI(false)
@@ -229,7 +236,10 @@ class WebSyncActivity : AppCompatActivity() {
 
     private fun searchAndExtract(phone: String) {
         if (!missingSearchActive) return
-        binding.webView.evaluateJavascript(SEARCH_RESULT_SCRIPT, null)
+        val escapedPhone = phone.replace("\\", "\\\\").replace("'", "\\'")
+        binding.webView.evaluateJavascript(
+            "window.__waCurrentPhone = '$escapedPhone';$SEARCH_RESULT_SCRIPT", null
+        )
         main.postDelayed({ clearSearchAndNext() }, 2500)
     }
 
@@ -252,7 +262,16 @@ class WebSyncActivity : AppCompatActivity() {
             binding.progressBar.max = if (total > 0) total else 1
             binding.progressBar.progress = current
         }
-        SyncForegroundService.updateProgress(this, status, current, total)
+        SyncForegroundService.updateProgress(status, current, total)
+    }
+
+    private fun statsLine(): String =
+        "Găsite: $foundCount · Fără poză: $noPhotoCount · Șterse: $deletedCount · Fără WhatsApp: $notOnWhatsappCount · Erori: $errorCount"
+
+    private fun updateStats() {
+        val line = statsLine()
+        runOnUiThread { binding.statsText.text = line }
+        SyncForegroundService.updateStats(line)
     }
 
     private fun appendLog(message: String) {
@@ -270,44 +289,57 @@ class WebSyncActivity : AppCompatActivity() {
                 val bytes = Base64.decode(base64Jpeg, Base64.DEFAULT)
                 if (bytes.size < 500) {
                     appendLog("[$phone]: captură prea mică, sărită")
-                    skipped++
+                    errorCount++
+                    updateStats()
                     return false
                 }
                 val normalized = repo.normalize(phone)
                 val matches = repo.loadContacts().filter { repo.normalize(it.phone) == normalized }
                 if (matches.isEmpty()) {
                     appendLog("[$phone]: fără contact potrivit în agendă")
-                    skipped++
+                    errorCount++
+                    updateStats()
                     return false
                 }
                 for (m in matches) repo.setPhoto(m.contactId, bytes)
-                updated++
-                appendLog("[$phone]: poză salvată (${matches.size} contact(e))")
+                foundCount++
+                appendLog("[$phone]: poză găsită și salvată (${matches.size} contact(e))")
+                updateStats()
                 true
             } catch (e: Exception) {
                 appendLog("[$phone]: eroare — ${e.message}")
-                skipped++
+                errorCount++
+                updateStats()
                 false
             }
         }
 
         @JavascriptInterface
         fun noPhoto(phone: String) {
+            noPhotoCount++
             if (!deleteMissingEnabled) {
                 appendLog("[$phone]: fără poză pe WhatsApp")
-                skipped++
+                updateStats()
                 return
             }
             val normalized = repo.normalize(phone)
             val matches = repo.loadContacts().filter { repo.normalize(it.phone) == normalized && it.hasPhoto }
             if (matches.isEmpty()) {
-                appendLog("[$phone]: fără poză pe WhatsApp (niciun contact avea poză)")
-                skipped++
+                appendLog("[$phone]: fără poză pe WhatsApp")
+                updateStats()
                 return
             }
             for (m in matches) repo.deletePhoto(m.contactId)
-            updated++
+            deletedCount++
             appendLog("[$phone]: fără poză pe WhatsApp — poza ștearsă (${matches.size} contact(e))")
+            updateStats()
+        }
+
+        @JavascriptInterface
+        fun notOnWhatsapp(phone: String) {
+            notOnWhatsappCount++
+            appendLog("[$phone]: nu are cont WhatsApp")
+            updateStats()
         }
 
         @JavascriptInterface
@@ -426,7 +458,7 @@ function findConvHeader(){
 $JS_HELPERS
   try {
     const cell = document.querySelector('#side [data-testid="cell-frame-container"]');
-    if(!cell){ AndroidBridge.log('fără cont WhatsApp / fără rezultat pentru acest număr'); return; }
+    if(!cell){ AndroidBridge.notOnWhatsapp(window.__waCurrentPhone || ''); return; }
     fullClick(cell);
     const convHeader = await waitFor(findConvHeader, 3000, 200);
     if(!convHeader){ AndroidBridge.log('nu s-a deschis conversația'); return; }
