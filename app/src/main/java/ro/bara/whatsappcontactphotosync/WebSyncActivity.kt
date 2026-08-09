@@ -327,7 +327,7 @@ class WebSyncActivity : AppCompatActivity() {
         binding.webView.evaluateJavascript(script, null)
         // Safety net only — the script itself signals completion via
         // AndroidBridge.searchDone(), which normally advances well before this.
-        main.postDelayed({ advanceIfStillCurrent(gen) }, 24000)
+        main.postDelayed({ advanceIfStillCurrent(gen) }, 45000)
     }
 
     private fun advanceIfStillCurrent(gen: Int) {
@@ -492,6 +492,22 @@ async function waitFor(check, timeoutMs, stepMs){
   while(Date.now()-start<timeoutMs){ const v=check(); if(v) return v; await wait(stepMs); }
   return null;
 }
+// React often re-renders in several quick stages — a value can differ from
+// the "before" baseline for one poll tick and then change again a moment
+// later. Requiring the SAME new value on two consecutive polls avoids
+// reacting to that kind of in-between, not-yet-settled state.
+async function waitForStableChange(getValue, baseline, timeoutMs, stepMs){
+  timeoutMs = timeoutMs || 6000; stepMs = stepMs || 200;
+  const start = Date.now();
+  let last = null;
+  while (Date.now() - start < timeoutMs) {
+    const cur = getValue();
+    if (cur && cur !== baseline && cur === last) return cur;
+    last = cur;
+    await wait(stepMs);
+  }
+  return null;
+}
 function sanitizePhone(text){
   const c = text.replace(/[^\d+]/g,'');
   return c.length>=7 ? c : null;
@@ -547,10 +563,28 @@ function findConvHeader(){
 function findProfileButton(header){
   return header.querySelector('[aria-label="Profile details"], [title="Profile details"]') || header;
 }
+// WhatsApp Web keeps a pool of recycled (virtualized) row elements mounted
+// in the DOM for scroll performance — most of them are emptied out and
+// carry no visible text, but they still match the cell selector. Counting
+// or clicking the raw querySelectorAll result picks up this "hollow" pool
+// instead of the real, currently-rendered result, which is why naive
+// list-size comparisons looked like they never finished filtering. Only
+// cells with actual text content are real.
+function findResultCells(){
+  // Sorted by vertical position, not DOM order: WhatsApp's virtualized list
+  // can keep recycled nodes with stale (but non-empty) leftover text around
+  // during a transition, and their DOM order doesn't reliably match what's
+  // actually shown on screen. The real, current top result is whichever
+  // real cell is physically closest to the top of the list.
+  return Array.from(document.querySelectorAll('#side [data-testid="cell-frame-container"]'))
+    .filter(c => c.innerText.trim().length > 0)
+    .map(c => ({c, top: c.getBoundingClientRect().top}))
+    .sort((a,b) => a.top - b.top)
+    .map(x => x.c);
+}
 function listSignature(){
-  const cells = document.querySelectorAll('#side [data-testid="cell-frame-container"]');
-  const names = [];
-  for (let i=0;i<Math.min(cells.length,3);i++){ names.push(cells[i].innerText.split('\n')[0]); }
+  const cells = findResultCells();
+  const names = cells.slice(0,3).map(c => c.innerText.split('\n')[0]);
   return names.join('|') + '#' + cells.length;
 }
 """
@@ -588,39 +622,48 @@ $JS_HELPERS
   try {
     const p0 = window.__waCurrentPhone || '';
     AndroidBridge.log('[' + p0 + '] pas 1: aștept filtrarea listei...');
-    const changed = await waitFor(() => {
-      const sig = listSignature();
-      return sig !== window.__waBaseline ? sig : null;
-    }, 7000, 200);
+    const changed = await waitForStableChange(listSignature, window.__waBaseline, 6000, 200);
     if(!changed){ AndroidBridge.log('[' + p0 + '] EȘEC pas 1: lista nu s-a filtrat'); AndroidBridge.searchFailed(p0); return; }
-    AndroidBridge.log('[' + p0 + '] pas 1 OK: ' + changed);
-    const cell = document.querySelector('#side [data-testid="cell-frame-container"]');
+    // WhatsApp's list recycling can settle into a "stable" but still not
+    // final layout for a beat longer than two polls — give it a bit more
+    // time, then re-read once more so we click the truly final top result.
+    await wait(700);
+    AndroidBridge.log('[' + p0 + '] pas 1 OK: ' + listSignature());
+    const cell = findResultCells()[0];
     if(!cell){ AndroidBridge.log('[' + p0 + '] fără rezultat în listă'); AndroidBridge.notOnWhatsapp(p0); return; }
 
     // The conversation header is a persistent DOM node reused across chats —
     // it exists from the very first chat opened in the session onward, so
     // just waiting for it to "exist" resolves instantly and races ahead of
     // React actually rendering the newly clicked contact. Wait for its text
-    // to actually change instead.
+    // to actually change (and settle) instead.
     const headerBefore = findConvHeader();
     const headerBeforeText = headerBefore ? headerBefore.innerText : '';
     fullClick(cell);
     AndroidBridge.log('[' + p0 + '] pas 2: am dat click pe rezultat, aștept antetul...');
-    const convHeader = await waitFor(() => {
-      const h = findConvHeader();
-      return (h && h.innerText.trim().length>0 && h.innerText !== headerBeforeText) ? h : null;
-    }, 6000, 200);
-    if(!convHeader){ AndroidBridge.log('[' + p0 + '] EȘEC pas 2: antetul nu s-a schimbat (era: "' + headerBeforeText.slice(0,30) + '")'); AndroidBridge.searchFailed(p0); return; }
-    AndroidBridge.log('[' + p0 + '] pas 2 OK: ' + convHeader.innerText.split('\n')[0]);
+    const headerText = await waitForStableChange(
+      () => { const h = findConvHeader(); return h ? h.innerText : ''; },
+      headerBeforeText, 8000, 200
+    );
+    if(!headerText){ AndroidBridge.log('[' + p0 + '] EȘEC pas 2: antetul nu s-a schimbat (era: "' + headerBeforeText.slice(0,30) + '")'); AndroidBridge.searchFailed(p0); return; }
+    const convHeader = findConvHeader();
+    AndroidBridge.log('[' + p0 + '] pas 2 OK: ' + headerText.split('\n')[0]);
+    // Same persistent-node trap as the header: the info panel (drawer-right)
+    // is reused across contacts/groups, so it can still show the PREVIOUS
+    // selection's content (even "Group info" from an earlier iteration) the
+    // instant it's queried. Wait for its text to change and settle too.
+    const panelBefore = document.querySelector('[data-testid="drawer-right"]');
+    const panelBeforeText = panelBefore ? panelBefore.innerText : '';
     fullClick(findProfileButton(convHeader));
     AndroidBridge.log('[' + p0 + '] pas 3: am dat click pe profil, aștept panoul...');
-    const panel = await waitFor(() => {
-      const p = document.querySelector('[data-testid="drawer-right"]');
-      return (p && p.innerText.trim().length>0) ? p : null;
-    }, 4000);
+    const panelText = await waitForStableChange(
+      () => { const p = document.querySelector('[data-testid="drawer-right"]'); return p ? p.innerText : ''; },
+      panelBeforeText, 6000, 200
+    );
+    const panel = panelText ? document.querySelector('[data-testid="drawer-right"]') : null;
     if(!panel){ AndroidBridge.log('[' + p0 + '] EȘEC pas 3: panoul de info nu s-a deschis'); AndroidBridge.searchFailed(p0); closeOverlay(); return; }
     AndroidBridge.log('[' + p0 + '] pas 3 OK: panou deschis');
-    if(panel.innerText.indexOf('Group info') === 0 || /^Group info/.test(panel.innerText)){
+    if(/^Group info/.test(panelText)){
       // WhatsApp's search mixes chats, contacts AND groups — if this number
       // has no direct 1:1 chat but is a member of a group, the group can
       // outrank the actual contact in the results. A group's info panel has
@@ -632,9 +675,9 @@ $JS_HELPERS
     }
     const phoneText = findPhoneInPanel();
     const phone = phoneText ? sanitizePhone(phoneText) : null;
-    if(!phone){ AndroidBridge.log('[' + p0 + '] EȘEC pas 4: nu am găsit numărul în panou (text: "' + panel.innerText.slice(0,60).replace(/\n/g,' ') + '")'); AndroidBridge.searchFailed(p0); closeOverlay(); return; }
+    if(!phone){ AndroidBridge.log('[' + p0 + '] EȘEC pas 4: nu am găsit numărul în panou (text: "' + panelText.slice(0,60).replace(/\n/g,' ') + '")'); AndroidBridge.searchFailed(p0); closeOverlay(); return; }
     AndroidBridge.log('[' + p0 + '] pas 4 OK: numărul din panou = ' + phone);
-    const url = await waitFor(findAvatarUrl, 3500, 250);
+    const url = await waitFor(findAvatarUrl, 5000, 250);
     if(!url){ AndroidBridge.log('[' + p0 + '] pas 5: fără poză găsită'); AndroidBridge.noPhoto(phone); closeOverlay(); return; }
     AndroidBridge.log('[' + p0 + '] pas 5 OK: poză găsită, salvez...');
     const b64 = await toBase64(url);
