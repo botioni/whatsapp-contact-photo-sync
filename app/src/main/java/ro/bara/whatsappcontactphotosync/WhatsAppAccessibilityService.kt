@@ -49,6 +49,7 @@ class WhatsAppAccessibilityService : AccessibilityService() {
     private var skipped = 0
     private var avatarAttempts = 0
     private var avatarConfirmRequestId = 0
+    private var avatarClickedAt = 0L
 
     private fun log(message: String) {
         Log.d(TAG, message)
@@ -88,8 +89,19 @@ class WhatsAppAccessibilityService : AccessibilityService() {
             return
         }
 
-        if (waitingForPhotoConfirm && event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-            confirmPhotoOpened()
+        if (waitingForPhotoConfirm) {
+            // WhatsApp's full-photo viewer isn't necessarily a new window —
+            // on some versions it's a same-window transition, which only
+            // fires TYPE_WINDOW_CONTENT_CHANGED, not TYPE_WINDOW_STATE_CHANGED.
+            // Waiting only for the latter meant we never confirmed the photo
+            // opened and always fell through to the timeout, even when the
+            // tap worked and a photo existed.
+            val sinceClick = android.os.SystemClock.elapsedRealtime() - avatarClickedAt
+            val isRelevantEvent = event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
+                event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
+            if (isRelevantEvent && sinceClick > 300) {
+                confirmPhotoOpened()
+            }
         }
     }
 
@@ -212,9 +224,10 @@ class WhatsAppAccessibilityService : AccessibilityService() {
                 log("[${current?.name}] avatar clicked (attempt $avatarAttempts), waiting to see if a photo opens")
                 waitingForAvatar = false
                 waitingForPhotoConfirm = true
+                avatarClickedAt = android.os.SystemClock.elapsedRealtime()
                 avatarConfirmRequestId++
                 val requestId = avatarConfirmRequestId
-                main.postDelayed({ avatarConfirmTimedOut(requestId) }, 1600)
+                main.postDelayed({ avatarConfirmTimedOut(requestId) }, 2000)
                 return
             }
         }
