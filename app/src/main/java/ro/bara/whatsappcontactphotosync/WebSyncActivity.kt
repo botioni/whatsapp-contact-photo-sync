@@ -5,6 +5,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.Base64
+import android.view.KeyCharacterMap
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -33,7 +34,6 @@ class WebSyncActivity : AppCompatActivity() {
 
     private var missingQueue: List<String> = emptyList()
     private var missingIndex = 0
-    private var waitingForMissingLoad = false
     private var missingSearchActive = false
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -49,17 +49,7 @@ class WebSyncActivity : AppCompatActivity() {
             userAgentString = DESKTOP_USER_AGENT
         }
         binding.webView.addJavascriptInterface(JsBridge(), "AndroidBridge")
-        binding.webView.webViewClient = object : WebViewClient() {
-            override fun onPageFinished(view: WebView, url: String?) {
-                super.onPageFinished(view, url)
-                if (waitingForMissingLoad) {
-                    waitingForMissingLoad = false
-                    // Give the SPA time to render the opened chat before we
-                    // start poking at its DOM.
-                    main.postDelayed({ extractCurrentChat() }, 3500)
-                }
-            }
-        }
+        binding.webView.webViewClient = WebViewClient()
         binding.webView.loadUrl("https://web.whatsapp.com")
 
         binding.runExistingButton.setOnClickListener {
@@ -74,18 +64,27 @@ class WebSyncActivity : AppCompatActivity() {
         binding.stopButton.setOnClickListener {
             binding.webView.evaluateJavascript("window.__waStop = true;", null)
             missingSearchActive = false
-            waitingForMissingLoad = false
             main.removeCallbacksAndMessages(null)
             appendLog("Oprit de utilizator.")
         }
     }
 
+    /**
+     * Types each phone number into WhatsApp's own search box using real
+     * Android KeyEvents (not JS-simulated ones) and clicks the result the
+     * same way a person would. This stays inside the same page — no full
+     * reload per contact — so it runs about as fast as the existing-chats
+     * flow. Real (trusted) key events matter here: WhatsApp's search input
+     * is a React-controlled field that stops reacting to JS-dispatched
+     * "input" events after the first search in a session, but genuine
+     * OS-level keystrokes go through the normal input pipeline every time.
+     */
     private fun startMissingSearch() {
         val contacts = repo.loadContacts()
         missingQueue = contacts.map { repo.normalize(it.phone) }.filter { it.length >= 7 }.distinct()
         missingIndex = 0
         missingSearchActive = true
-        appendLog("Caut ${missingQueue.size} numere (inclusiv fără conversație existentă)...")
+        appendLog("Caut ${missingQueue.size} numere prin căsuța de căutare...")
         processNextMissing()
     }
 
@@ -97,15 +96,36 @@ class WebSyncActivity : AppCompatActivity() {
             return
         }
         val phone = missingQueue[missingIndex++]
-        appendLog("[$phone] (${missingIndex}/${missingQueue.size}) deschid...")
-        waitingForMissingLoad = true
-        binding.webView.loadUrl("https://web.whatsapp.com/send?phone=$phone")
+        appendLog("[$phone] (${missingIndex}/${missingQueue.size}) caut...")
+        binding.webView.evaluateJavascript(FOCUS_SEARCH_SCRIPT) { result ->
+            if (!missingSearchActive) return@evaluateJavascript
+            if (result?.trim('"') != "true") {
+                appendLog("[$phone]: nu am găsit căsuța de căutare")
+                main.postDelayed({ processNextMissing() }, 400)
+                return@evaluateJavascript
+            }
+            typeIntoWebView("+$phone")
+            main.postDelayed({ searchAndExtract(phone) }, 1200)
+        }
     }
 
-    private fun extractCurrentChat() {
+    private fun searchAndExtract(phone: String) {
         if (!missingSearchActive) return
-        binding.webView.evaluateJavascript(EXTRACT_CURRENT_SCRIPT, null)
-        main.postDelayed({ processNextMissing() }, 5000)
+        binding.webView.evaluateJavascript(SEARCH_RESULT_SCRIPT, null)
+        main.postDelayed({ clearSearchAndNext() }, 2500)
+    }
+
+    private fun clearSearchAndNext() {
+        if (!missingSearchActive) return
+        binding.webView.evaluateJavascript(CLEAR_SEARCH_SCRIPT) {
+            main.postDelayed({ processNextMissing() }, 500)
+        }
+    }
+
+    private fun typeIntoWebView(text: String) {
+        binding.webView.requestFocus()
+        val events = KeyCharacterMap.load(KeyCharacterMap.VIRTUAL_KEYBOARD).getEvents(text.toCharArray())
+        events?.forEach { binding.webView.dispatchKeyEvent(it) }
     }
 
     private fun appendLog(message: String) {
@@ -286,37 +306,72 @@ $JS_HELPERS
 })();
 """
 
-        /**
-         * Run once after navigating to web.whatsapp.com/send?phone=XXXX.
-         * This URL directly opens the conversation with that number (proven
-         * more reliable than driving the in-app search box: WhatsApp's
-         * search input relies on React's internal value-tracking, which
-         * silently stops reacting to programmatic value changes after the
-         * first search in a session — a real page navigation avoids that
-         * entirely since each load starts from a clean state).
-         */
-        private val EXTRACT_CURRENT_SCRIPT = """
+        /** Clicks the search box so real Android KeyEvents land in it. */
+        private val FOCUS_SEARCH_SCRIPT = """
+(function(){
+  const box = document.querySelector('[data-testid="chat-list-search-container"] input') ||
+    document.querySelector('input[aria-label="Search or start a new chat"]');
+  if(!box) return false;
+  const rect = box.getBoundingClientRect();
+  const x = rect.left + rect.width/2, y = rect.top + rect.height/2;
+  const opts = {bubbles:true, cancelable:true, clientX:x, clientY:y, view:window};
+  box.dispatchEvent(new PointerEvent('pointerdown', opts));
+  box.dispatchEvent(new MouseEvent('mousedown', opts));
+  box.dispatchEvent(new PointerEvent('pointerup', opts));
+  box.dispatchEvent(new MouseEvent('mouseup', opts));
+  box.dispatchEvent(new MouseEvent('click', opts));
+  box.focus();
+  return true;
+})();
+"""
+
+        /** Clicks the first search result and extracts its avatar, same as an existing-chat click. */
+        private val SEARCH_RESULT_SCRIPT = """
 (async function(){
 $JS_HELPERS
   try {
-    const convHeader = await waitFor(findConvHeader, 4000, 200);
-    if(!convHeader){ AndroidBridge.log('nu s-a deschis niciun chat (probabil nu e pe WhatsApp)'); return; }
+    const cell = document.querySelector('#side [data-testid="cell-frame-container"]');
+    if(!cell){ AndroidBridge.log('fără cont WhatsApp / fără rezultat pentru acest număr'); return; }
+    fullClick(cell);
+    const convHeader = await waitFor(findConvHeader, 3000, 200);
+    if(!convHeader){ AndroidBridge.log('nu s-a deschis conversația'); return; }
     fullClick(convHeader.querySelector('span[dir="auto"]') || convHeader.querySelector('img'));
     const panel = await waitFor(() => {
       const p = document.querySelector('[data-testid="drawer-right"]');
       return (p && p.innerText.trim().length>0) ? p : null;
     }, 3000);
-    if(!panel){ AndroidBridge.log('nu s-a deschis panoul de informații'); return; }
+    if(!panel){ AndroidBridge.log('fără panou info'); closeOverlay(); return; }
     const phoneText = findPhoneInPanel();
     const phone = phoneText ? sanitizePhone(phoneText) : null;
-    if(!phone){ AndroidBridge.log('nu am găsit numărul în panou'); return; }
+    if(!phone){ AndroidBridge.log('nu am găsit numărul în panou'); closeOverlay(); return; }
     const url = await waitFor(findAvatarUrl, 2500, 250);
-    if(!url){ AndroidBridge.log('[' + phone + ']: fără poză'); return; }
+    if(!url){ AndroidBridge.log('[' + phone + ']: fără poză'); closeOverlay(); return; }
     const b64 = await toBase64(url);
     AndroidBridge.savePhoto(phone, b64);
+    closeOverlay();
   } catch(e){
     AndroidBridge.log('eroare: ' + e.message);
   }
+})();
+"""
+
+        /** Clicks the search box's own "clear" (X) button to reset for the next number. */
+        private val CLEAR_SEARCH_SCRIPT = """
+(function(){
+  const container = document.querySelector('[data-testid="chat-list-search-container"]');
+  const btn = container ? container.querySelector('button, [role="button"]') : null;
+  if(btn){
+    const rect = btn.getBoundingClientRect();
+    const x = rect.left + rect.width/2, y = rect.top + rect.height/2;
+    const opts = {bubbles:true, cancelable:true, clientX:x, clientY:y, view:window};
+    btn.dispatchEvent(new PointerEvent('pointerdown', opts));
+    btn.dispatchEvent(new MouseEvent('mousedown', opts));
+    btn.dispatchEvent(new PointerEvent('pointerup', opts));
+    btn.dispatchEvent(new MouseEvent('mouseup', opts));
+    btn.dispatchEvent(new MouseEvent('click', opts));
+  }
+  document.body.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', bubbles:true}));
+  return true;
 })();
 """
     }
