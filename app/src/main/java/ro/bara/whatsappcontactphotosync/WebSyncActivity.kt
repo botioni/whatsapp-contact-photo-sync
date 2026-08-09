@@ -576,24 +576,36 @@ $JS_HELPERS
     if(!changed){ AndroidBridge.searchFailed(window.__waCurrentPhone || ''); return; }
     const cell = document.querySelector('#side [data-testid="cell-frame-container"]');
     if(!cell){ AndroidBridge.notOnWhatsapp(window.__waCurrentPhone || ''); return; }
+
+    // The conversation header is a persistent DOM node reused across chats —
+    // it exists from the very first chat opened in the session onward, so
+    // just waiting for it to "exist" resolves instantly and races ahead of
+    // React actually rendering the newly clicked contact. Wait for its text
+    // to actually change instead.
+    const headerBefore = findConvHeader();
+    const headerBeforeText = headerBefore ? headerBefore.innerText : '';
     fullClick(cell);
-    const convHeader = await waitFor(findConvHeader, 3000, 200);
+    const convHeader = await waitFor(() => {
+      const h = findConvHeader();
+      return (h && h.innerText.trim().length>0 && h.innerText !== headerBeforeText) ? h : null;
+    }, 4000, 200);
     if(!convHeader){ AndroidBridge.searchFailed(window.__waCurrentPhone || ''); return; }
     fullClick(findProfileButton(convHeader));
     const panel = await waitFor(() => {
       const p = document.querySelector('[data-testid="drawer-right"]');
       return (p && p.innerText.trim().length>0) ? p : null;
     }, 3000);
-    if(!panel){ AndroidBridge.log('fără panou info'); closeOverlay(); return; }
+    if(!panel){ AndroidBridge.searchFailed(window.__waCurrentPhone || ''); closeOverlay(); return; }
     const phoneText = findPhoneInPanel();
     const phone = phoneText ? sanitizePhone(phoneText) : null;
-    if(!phone){ AndroidBridge.log('nu am găsit numărul în panou'); closeOverlay(); return; }
+    if(!phone){ AndroidBridge.searchFailed(window.__waCurrentPhone || ''); closeOverlay(); return; }
     const url = await waitFor(findAvatarUrl, 2500, 250);
     if(!url){ AndroidBridge.noPhoto(phone); closeOverlay(); return; }
     const b64 = await toBase64(url);
     AndroidBridge.savePhoto(phone, b64);
     closeOverlay();
   } catch(e){
+    AndroidBridge.searchFailed(window.__waCurrentPhone || '');
     AndroidBridge.log('eroare: ' + e.message);
   } finally {
     AndroidBridge.searchDone(window.__waGen);
