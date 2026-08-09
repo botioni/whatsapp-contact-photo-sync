@@ -54,7 +54,6 @@ class ContactPickerActivity : AppCompatActivity() {
         updateSelectionCount()
 
         binding.selectAllButton.setOnClickListener {
-            selectedContactIds.clear()
             selectedContactIds += filtered.map { it.contactId }
             adapter.submitList(filtered)
             updateSelectionCount()
@@ -91,6 +90,8 @@ class ContactPickerActivity : AppCompatActivity() {
 
     private fun updateSelectionCount() {
         binding.selectionCountText.text = "${selectedContactIds.size} selectate"
+        binding.confirmSelectionButton.text = "Confirmă selecția (${selectedContactIds.size})"
+        binding.confirmSelectionButton.isEnabled = selectedContactIds.isNotEmpty()
     }
 
     companion object {
