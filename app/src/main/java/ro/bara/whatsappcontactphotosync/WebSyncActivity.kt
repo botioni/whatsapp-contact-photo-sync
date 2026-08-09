@@ -1,6 +1,8 @@
 package ro.bara.whatsappcontactphotosync
 
+import android.Manifest
 import android.annotation.SuppressLint
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -11,6 +13,7 @@ import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebStorage
 import android.webkit.WebViewClient
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import ro.bara.whatsappcontactphotosync.databinding.ActivityWebSyncBinding
 
@@ -41,12 +44,32 @@ class WebSyncActivity : AppCompatActivity() {
     private var loggedIn = false
     private var debugMode = false
 
+    private val notificationPermission = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { /* if denied, the sync still runs, it just won't show a notification */ }
+
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityWebSyncBinding.inflate(layoutInflater)
         setContentView(binding.root)
         repo = ContactRepository(this)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+
+        SyncForegroundService.stopCallback = {
+            runOnUiThread {
+                binding.webView.evaluateJavascript("window.__waStop = true;", null)
+                missingSearchActive = false
+                main.removeCallbacksAndMessages(null)
+                updateProgress("Oprit din notificare.", missingIndex, missingQueue.size)
+                if (missingIndex < missingQueue.size) {
+                    binding.runMissingButton.text = "Continuă căutarea"
+                }
+            }
+        }
 
         binding.webView.settings.apply {
             javaScriptEnabled = true
@@ -68,6 +91,7 @@ class WebSyncActivity : AppCompatActivity() {
             missingSearchActive = false
             main.removeCallbacksAndMessages(null)
             updateProgress("Oprit.", missingIndex, missingQueue.size)
+            SyncForegroundService.stop(this)
             if (missingIndex < missingQueue.size) {
                 binding.runMissingButton.text = "Continuă căutarea"
             }
@@ -82,6 +106,11 @@ class WebSyncActivity : AppCompatActivity() {
         binding.logoutButton.setOnClickListener {
             logout()
         }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        SyncForegroundService.stopCallback = null
     }
 
     /**
@@ -117,6 +146,7 @@ class WebSyncActivity : AppCompatActivity() {
         missingIndex = 0
         binding.runMissingButton.text = "Caută contactele"
         main.removeCallbacksAndMessages(null)
+        SyncForegroundService.stop(this)
         binding.webView.evaluateJavascript("window.__waStop = true;", null)
         CookieManager.getInstance().removeAllCookies(null)
         WebStorage.getInstance().deleteAllData()
@@ -156,6 +186,7 @@ class WebSyncActivity : AppCompatActivity() {
         missingSearchActive = true
         binding.runMissingButton.text = "Caută contactele"
         binding.webView.evaluateJavascript("window.__waStop = false;", null)
+        SyncForegroundService.start(this)
         updateProgress(if (resuming) "Reiau căutarea..." else "Se caută...", missingIndex, missingQueue.size)
         processNextMissing()
     }
@@ -165,6 +196,7 @@ class WebSyncActivity : AppCompatActivity() {
         if (missingIndex >= missingQueue.size) {
             updateProgress("Gata. Actualizate: $updated · Omise: $skipped", missingIndex, missingQueue.size)
             missingSearchActive = false
+            SyncForegroundService.stop(this)
             return
         }
         val phone = missingQueue[missingIndex++]
@@ -207,6 +239,7 @@ class WebSyncActivity : AppCompatActivity() {
             binding.progressBar.max = if (total > 0) total else 1
             binding.progressBar.progress = current
         }
+        SyncForegroundService.updateProgress(this, status, current, total)
     }
 
     private fun appendLog(message: String) {
