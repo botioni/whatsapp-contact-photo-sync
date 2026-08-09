@@ -72,6 +72,11 @@ class CropOverlayView @JvmOverloads constructor(
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
+        // Before layout has run (or before imageWidth/imageHeight are set),
+        // imageRect() falls back to a zero-size rect, which used to make the
+        // dim overlay cover the entire view — looking exactly like "the
+        // photo is black" even when the real capture is fine.
+        if (imageWidth == 0 || imageHeight == 0 || width == 0 || height == 0) return
         val box = cropRectPx()
 
         canvas.drawRect(0f, 0f, width.toFloat(), box.top, dimPaint)

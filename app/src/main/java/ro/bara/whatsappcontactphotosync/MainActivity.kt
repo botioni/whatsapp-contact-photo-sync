@@ -82,7 +82,7 @@ class MainActivity : AppCompatActivity(), SyncListener {
             AlertDialog.Builder(this)
                 .setTitle("Calibrare captură")
                 .setMessage(
-                    "Apasă OK, apoi ai 20 de secunde: deschide WhatsApp, intră pe un contact " +
+                    "Apasă OK, apoi ai 10 secunde: deschide WhatsApp, intră pe un contact " +
                         "cu poză de profil, apasă pe avatar ca să se mărească poza și rămâi " +
                         "nemișcat pe acel ecran. Captura se face automat la final de numărătoare."
                 )

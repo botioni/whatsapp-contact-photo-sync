@@ -151,8 +151,8 @@ class WhatsAppAccessibilityService : AccessibilityService() {
     }
 
     fun startCalibrationCapture() {
-        log("Calibrare: ai 20 de secunde — deschide WhatsApp, intră pe contact, apasă pe avatar și așteaptă nemișcat pe poza mare")
-        main.postDelayed({ captureForCalibration() }, 20000)
+        log("Calibrare: ai 10 secunde — deschide WhatsApp, intră pe contact, apasă pe avatar și așteaptă nemișcat pe poza mare")
+        main.postDelayed({ captureForCalibration() }, 10000)
     }
 
     private fun captureForCalibration() {
