@@ -41,6 +41,7 @@ class WebSyncActivity : AppCompatActivity() {
     private var noPhotoCount = 0
     private var deletedCount = 0
     private var notOnWhatsappCount = 0
+    private var groupOnlyCount = 0
     private var errorCount = 0
 
     private var missingQueue: List<String> = emptyList()
@@ -270,6 +271,7 @@ class WebSyncActivity : AppCompatActivity() {
             noPhotoCount = 0
             deletedCount = 0
             notOnWhatsappCount = 0
+            groupOnlyCount = 0
             errorCount = 0
             updateStats()
         }
@@ -358,7 +360,8 @@ class WebSyncActivity : AppCompatActivity() {
     }
 
     private fun statsLine(): String =
-        "Găsite: $foundCount · Fără poză: $noPhotoCount · Șterse: $deletedCount · Fără WhatsApp: $notOnWhatsappCount · Erori: $errorCount"
+        "Găsite: $foundCount · Fără poză: $noPhotoCount · Șterse: $deletedCount · " +
+            "Fără WhatsApp: $notOnWhatsappCount · Doar grup: $groupOnlyCount · Erori: $errorCount"
 
     private fun updateStats() {
         val line = statsLine()
@@ -431,6 +434,13 @@ class WebSyncActivity : AppCompatActivity() {
         fun notOnWhatsapp(phone: String) {
             notOnWhatsappCount++
             appendLog("[$phone]: nu are cont WhatsApp")
+            updateStats()
+        }
+
+        @JavascriptInterface
+        fun groupOnly(phone: String) {
+            groupOnlyCount++
+            appendLog("[$phone]: căutarea a găsit doar un grup, nu contactul direct")
             updateStats()
         }
 
@@ -610,6 +620,16 @@ $JS_HELPERS
     }, 4000);
     if(!panel){ AndroidBridge.log('[' + p0 + '] EȘEC pas 3: panoul de info nu s-a deschis'); AndroidBridge.searchFailed(p0); closeOverlay(); return; }
     AndroidBridge.log('[' + p0 + '] pas 3 OK: panou deschis');
+    if(panel.innerText.indexOf('Group info') === 0 || /^Group info/.test(panel.innerText)){
+      // WhatsApp's search mixes chats, contacts AND groups — if this number
+      // has no direct 1:1 chat but is a member of a group, the group can
+      // outrank the actual contact in the results. A group's info panel has
+      // no personal phone number to extract, so there's nothing to do here.
+      AndroidBridge.log('[' + p0 + '] rezultatul a fost un grup, nu contactul direct');
+      AndroidBridge.groupOnly(p0);
+      closeOverlay();
+      return;
+    }
     const phoneText = findPhoneInPanel();
     const phone = phoneText ? sanitizePhone(phoneText) : null;
     if(!phone){ AndroidBridge.log('[' + p0 + '] EȘEC pas 4: nu am găsit numărul în panou (text: "' + panel.innerText.slice(0,60).replace(/\n/g,' ') + '")'); AndroidBridge.searchFailed(p0); closeOverlay(); return; }
