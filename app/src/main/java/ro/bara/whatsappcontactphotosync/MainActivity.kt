@@ -122,6 +122,17 @@ class MainActivity : AppCompatActivity(), SyncListener {
             }
             pickPhotosFolder.launch(null)
         }
+
+        binding.webSyncButton.setOnClickListener {
+            if (!hasContactsPermission()) {
+                permissions.launch(arrayOf(
+                    Manifest.permission.READ_CONTACTS,
+                    Manifest.permission.WRITE_CONTACTS
+                ))
+                return@setOnClickListener
+            }
+            startActivity(Intent(this, WebSyncActivity::class.java))
+        }
     }
 
     private fun importPhotosFromFolder(treeUri: android.net.Uri) {
