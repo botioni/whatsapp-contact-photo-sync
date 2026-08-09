@@ -1,0 +1,1 @@
+Manual-only sync. No background scheduler. Accessibility is required because WhatsApp does not expose a public Android API for contact profile photos.
