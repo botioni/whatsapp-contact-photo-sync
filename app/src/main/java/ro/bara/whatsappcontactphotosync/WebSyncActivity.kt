@@ -470,8 +470,10 @@ function closeOverlay(){
   document.body.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', bubbles:true}));
 }
 function findConvHeader(){
-  const headers = Array.from(document.querySelectorAll('header'));
-  return headers.find(h => h.getAttribute('data-testid')!=='chatlist-header' && h.querySelector('img'));
+  return document.querySelector('[data-testid="conversation-header"]');
+}
+function findProfileButton(header){
+  return header.querySelector('[aria-label="Profile details"], [title="Profile details"]') || header;
 }
 function listSignature(){
   const cells = document.querySelectorAll('#side [data-testid="cell-frame-container"]');
@@ -521,8 +523,8 @@ $JS_HELPERS
     if(!cell){ AndroidBridge.notOnWhatsapp(window.__waCurrentPhone || ''); return; }
     fullClick(cell);
     const convHeader = await waitFor(findConvHeader, 3000, 200);
-    if(!convHeader){ AndroidBridge.log('nu s-a deschis conversația'); return; }
-    fullClick(convHeader.querySelector('span[dir="auto"]') || convHeader.querySelector('img'));
+    if(!convHeader){ AndroidBridge.searchFailed(window.__waCurrentPhone || ''); return; }
+    fullClick(findProfileButton(convHeader));
     const panel = await waitFor(() => {
       const p = document.querySelector('[data-testid="drawer-right"]');
       return (p && p.innerText.trim().length>0) ? p : null;
