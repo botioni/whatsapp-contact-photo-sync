@@ -13,7 +13,9 @@ import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebStorage
 import android.webkit.WebViewClient
+import android.widget.FrameLayout
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import org.json.JSONObject
 import ro.bara.whatsappcontactphotosync.databinding.ActivityWebSyncBinding
@@ -49,6 +51,8 @@ class WebSyncActivity : AppCompatActivity() {
     private var loggedIn = false
     private var debugMode = false
     @Volatile private var deleteMissingEnabled = false
+    private var webViewInOverlay = false
+    private var overlayPromptShown = false
 
     private val notificationPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -130,6 +134,41 @@ class WebSyncActivity : AppCompatActivity() {
     }
 
     /**
+     * When the Activity comes back to the foreground, pull the WebView back
+     * out of the background overlay (if it was moved there) and into our
+     * own layout.
+     */
+    override fun onStart() {
+        super.onStart()
+        if (webViewInOverlay) {
+            SyncForegroundService.moveOutOfOverlay(binding.webView)
+            binding.webViewContainer.addView(
+                binding.webView,
+                FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+            )
+            webViewInOverlay = false
+            updateWebViewVisibility()
+        }
+    }
+
+    /**
+     * When the Activity leaves the foreground (Home pressed, screen locked)
+     * while a search is running, move the WebView into a real overlay
+     * window owned by the foreground service, so it keeps rendering and
+     * running JS instead of being throttled the moment our window is gone.
+     * Requires the "draw over other apps" permission; if it isn't granted,
+     * this is a no-op and the sync simply pauses until the app is reopened.
+     */
+    override fun onStop() {
+        super.onStop()
+        if (missingSearchActive && loggedIn && SyncForegroundService.hasOverlayPermission(this)) {
+            if (SyncForegroundService.moveToOverlay(binding.webView)) {
+                webViewInOverlay = true
+            }
+        }
+    }
+
+    /**
      * Polls until WhatsApp Web shows the chat list (i.e. this device is
      * linked), then reveals the controls and hides the WebView itself —
      * the browser stays alive and keeps running underneath (so its
@@ -145,10 +184,26 @@ class WebSyncActivity : AppCompatActivity() {
                 binding.instructionCard.visibility = View.GONE
                 binding.controlsCard.visibility = View.VISIBLE
                 updateWebViewVisibility()
+                promptOverlayPermissionOnce()
             } else {
                 main.postDelayed({ pollLoginState() }, 2000)
             }
         }
+    }
+
+    private fun promptOverlayPermissionOnce() {
+        if (overlayPromptShown || SyncForegroundService.hasOverlayPermission(this)) return
+        overlayPromptShown = true
+        AlertDialog.Builder(this)
+            .setTitle("Rulare cu ecranul stins")
+            .setMessage(
+                "Ca să continue căutarea și cu telefonul blocat sau cu altă aplicație deschisă, " +
+                    "activează permisiunea \"Afișare peste alte aplicații\" pentru această aplicație. " +
+                    "Fără ea, sincronizarea se oprește temporar cât timp nu ești în aplicație."
+            )
+            .setPositiveButton("Activează") { _, _ -> SyncForegroundService.requestOverlayPermission(this) }
+            .setNegativeButton("Nu acum", null)
+            .show()
     }
 
     /** The WebView is only ever visible before login (to show the linking code) or while Debug is on. */

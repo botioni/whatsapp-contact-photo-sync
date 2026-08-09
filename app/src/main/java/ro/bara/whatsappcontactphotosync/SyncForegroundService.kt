@@ -7,20 +7,34 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.graphics.PixelFormat
+import android.net.Uri
 import android.os.Build
 import android.os.IBinder
+import android.provider.Settings
+import android.view.Gravity
+import android.view.ViewGroup
+import android.view.WindowManager
+import android.webkit.WebView
+import android.widget.FrameLayout
 import androidx.core.app.NotificationCompat
 
 /**
  * Keeps the sync process alive while the app is backgrounded (screen off,
- * user on another app) by holding a foreground-service notification. The
- * WebView driving the actual sync still lives in WebSyncActivity — this
- * service only prevents the OS from freezing/killing that process and
- * shows progress (and running stats) so the user doesn't have to keep the
- * screen open.
+ * user on another app) by holding a foreground-service notification, and
+ * (when the user has granted "draw over other apps") by hosting the actual
+ * WebView in a real, invisible system-overlay window whenever the Activity
+ * itself isn't visible.
  *
- * Note: swiping the app away from Recents still destroys the Activity (and
- * its WebView) — only pressing Home or locking the screen keeps it alive.
+ * This matters because a foreground service alone only stops the OS from
+ * killing the process — it does NOT stop Chromium's own page-visibility
+ * throttling, which pauses a WebView's JS timers once its hosting Activity
+ * window is gone. Moving the WebView into a real (if invisible) window
+ * keeps it "visible" from Chromium's point of view, so the automation
+ * keeps running at normal speed even with the screen off or another app in
+ * front. WebSyncActivity moves the WebView in on onStop() and back out on
+ * onStart(); if the overlay permission isn't granted, this is skipped and
+ * the sync simply pauses while backgrounded (the old behavior).
  */
 class SyncForegroundService : Service() {
 
@@ -28,6 +42,8 @@ class SyncForegroundService : Service() {
     private var lastCurrent = 0
     private var lastTotal = 0
     private var lastStats = ""
+
+    private var overlayContainer: FrameLayout? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -47,8 +63,48 @@ class SyncForegroundService : Service() {
     }
 
     override fun onDestroy() {
+        removeOverlay()
         instance = null
         super.onDestroy()
+    }
+
+    private fun attachToOverlay(webView: WebView): Boolean {
+        if (!Settings.canDrawOverlays(this)) return false
+        if (overlayContainer != null) return true
+        return try {
+            (webView.parent as? ViewGroup)?.removeView(webView)
+            val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+            val metrics = resources.displayMetrics
+            val params = WindowManager.LayoutParams(
+                metrics.widthPixels, metrics.heightPixels,
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                PixelFormat.TRANSLUCENT
+            )
+            params.gravity = Gravity.TOP or Gravity.START
+            val container = FrameLayout(this).apply { alpha = 0f }
+            container.addView(
+                webView,
+                FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+            )
+            wm.addView(container, params)
+            overlayContainer = container
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private fun detachFromOverlay(webView: WebView) {
+        val container = overlayContainer ?: return
+        container.removeView(webView)
+        removeOverlay()
+    }
+
+    private fun removeOverlay() {
+        val container = overlayContainer ?: return
+        overlayContainer = null
+        runCatching { (getSystemService(WINDOW_SERVICE) as WindowManager).removeView(container) }
     }
 
     private fun refreshNotification() {
@@ -133,5 +189,25 @@ class SyncForegroundService : Service() {
         fun stop(context: Context) {
             context.stopService(Intent(context, SyncForegroundService::class.java))
         }
+
+        fun hasOverlayPermission(context: Context): Boolean = Settings.canDrawOverlays(context)
+
+        fun requestOverlayPermission(context: Context) {
+            val intent = Intent(
+                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.parse("package:${context.packageName}")
+            )
+            context.startActivity(intent)
+        }
+
+        /** Moves the WebView into a real (invisible) overlay window so it keeps running while the Activity is gone. */
+        fun moveToOverlay(webView: WebView): Boolean = instance?.attachToOverlay(webView) ?: false
+
+        /** Moves the WebView back out — the caller is responsible for re-adding it to its own layout. */
+        fun moveOutOfOverlay(webView: WebView) {
+            instance?.detachFromOverlay(webView)
+        }
+
+        fun isInOverlay(): Boolean = instance?.overlayContainer != null
     }
 }
