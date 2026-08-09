@@ -79,7 +79,14 @@ class WebSyncActivity : AppCompatActivity() {
         }
     }
 
-    /** Polls until WhatsApp Web shows the chat list (i.e. this device is linked), then reveals the controls. */
+    /**
+     * Polls until WhatsApp Web shows the chat list (i.e. this device is
+     * linked), then reveals the controls and hides the WebView itself —
+     * the browser stays alive and keeps running underneath (so its
+     * measurements and clicks keep working), it's just not drawn, so the
+     * user only sees our own progress UI, never WhatsApp's screen flicking
+     * through contacts.
+     */
     private fun pollLoginState() {
         if (loggedIn) return
         binding.webView.evaluateJavascript(LOGIN_CHECK_SCRIPT) { result ->
@@ -87,6 +94,7 @@ class WebSyncActivity : AppCompatActivity() {
                 loggedIn = true
                 binding.instructionCard.visibility = View.GONE
                 binding.controlsLayout.visibility = View.VISIBLE
+                binding.webView.visibility = View.INVISIBLE
             } else {
                 main.postDelayed({ pollLoginState() }, 2000)
             }
@@ -103,6 +111,7 @@ class WebSyncActivity : AppCompatActivity() {
         loggedIn = false
         binding.controlsLayout.visibility = View.GONE
         binding.instructionCard.visibility = View.VISIBLE
+        binding.webView.visibility = View.VISIBLE
         binding.webView.loadUrl("https://web.whatsapp.com")
         main.postDelayed({ pollLoginState() }, 2000)
     }
