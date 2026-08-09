@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">WhatsApp Contact Photo Sync</string>
+    <string name="accessibility_description">Reads the visible WhatsApp contact screen after the user starts a manual synchronization and saves detected profile photos to matching phone contacts.</string>
+</resources>

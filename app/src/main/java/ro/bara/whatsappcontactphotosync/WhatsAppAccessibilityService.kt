@@ -168,12 +168,20 @@ class WhatsAppAccessibilityService : AccessibilityService() {
                     try {
                         val bitmap = hardwareResultToBitmap(result)
                         if (bitmap != null) {
-                            val avgBrightness = averageBrightness(bitmap)
                             lastCalibrationBitmap?.recycle()
                             lastCalibrationBitmap = bitmap
-                            log("Calibrare: captură reușită (${bitmap.width}x${bitmap.height}, luminozitate medie: $avgBrightness/255)")
-                            if (avgBrightness < 20) {
-                                log("Calibrare: ecranul pare aproape complet negru — probabil nu erai încă pe poza mare când s-a făcut captura. Verifică imaginea și, dacă nu se vede poza, apasă din nou Calibrează și fii mai rapid la navigare.")
+                            log("Calibrare: captură reușită (${bitmap.width}x${bitmap.height})")
+                            // Brightness is just a diagnostic hint — never let
+                            // it block showing the calibration screen if it
+                            // fails for any reason.
+                            try {
+                                val avgBrightness = averageBrightness(bitmap)
+                                log("Calibrare: luminozitate medie: $avgBrightness/255")
+                                if (avgBrightness < 20) {
+                                    log("Calibrare: ecranul pare aproape complet negru — probabil nu erai încă pe poza mare când s-a făcut captura. Verifică imaginea și, dacă nu se vede poza, apasă din nou Calibrează și fii mai rapid la navigare.")
+                                }
+                            } catch (e: Exception) {
+                                log("Calibrare: nu am putut calcula luminozitatea — ${e.message}")
                             }
                             listener?.onCalibrationCaptured()
                         } else {
@@ -202,9 +210,16 @@ class WhatsAppAccessibilityService : AccessibilityService() {
         // came back solid black on this device — confirmed by testing, not
         // just theory. Bitmap.createBitmap(source, x, y, w, h) is what the
         // very first version of this app used (no manual conversion at all)
-        // and it produced a real, usable photo, so use that same path for
-        // the full-size "subset" here too instead of a from-scratch bitmap.
-        val out = Bitmap.createBitmap(hwBitmap, 0, 0, hwBitmap.width, hwBitmap.height)
+        // and it produced a real, usable photo, so use that same path here.
+        //
+        // Important: requesting the *exact* same width/height as the source
+        // makes Android just hand back the original HARDWARE bitmap
+        // unchanged instead of creating a real copy — the original code
+        // never hit this because it always cropped a smaller sub-region.
+        // Trim 2px so a genuine conversion always happens.
+        val w = (hwBitmap.width - 2).coerceAtLeast(1)
+        val h = (hwBitmap.height - 2).coerceAtLeast(1)
+        val out = Bitmap.createBitmap(hwBitmap, 0, 0, w, h)
         hwBitmap.recycle()
         return out
     }
