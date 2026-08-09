@@ -68,6 +68,7 @@ class WebSyncActivity : AppCompatActivity() {
                 if (missingIndex < missingQueue.size) {
                     binding.runMissingButton.text = "Continuă căutarea"
                 }
+                setRunningUI(false)
             }
         }
 
@@ -95,6 +96,7 @@ class WebSyncActivity : AppCompatActivity() {
             if (missingIndex < missingQueue.size) {
                 binding.runMissingButton.text = "Continuă căutarea"
             }
+            setRunningUI(false)
         }
 
         binding.debugToggleButton.setOnClickListener {
@@ -127,7 +129,7 @@ class WebSyncActivity : AppCompatActivity() {
             if (result?.trim('"') == "true") {
                 loggedIn = true
                 binding.instructionCard.visibility = View.GONE
-                binding.controlsLayout.visibility = View.VISIBLE
+                binding.controlsCard.visibility = View.VISIBLE
                 updateWebViewVisibility()
             } else {
                 main.postDelayed({ pollLoginState() }, 2000)
@@ -140,11 +142,18 @@ class WebSyncActivity : AppCompatActivity() {
         binding.webView.visibility = if (!loggedIn || debugMode) View.VISIBLE else View.INVISIBLE
     }
 
+    /** Idle: filter switch + start button. Running: just the heartbeat, progress and stop. */
+    private fun setRunningUI(active: Boolean) {
+        binding.setupGroup.visibility = if (active) View.GONE else View.VISIBLE
+        binding.runningGroup.visibility = if (active) View.VISIBLE else View.GONE
+    }
+
     private fun logout() {
         missingSearchActive = false
         missingQueue = emptyList()
         missingIndex = 0
         binding.runMissingButton.text = "Caută contactele"
+        setRunningUI(false)
         main.removeCallbacksAndMessages(null)
         SyncForegroundService.stop(this)
         binding.webView.evaluateJavascript("window.__waStop = true;", null)
@@ -152,7 +161,7 @@ class WebSyncActivity : AppCompatActivity() {
         WebStorage.getInstance().deleteAllData()
         binding.webView.clearCache(true)
         loggedIn = false
-        binding.controlsLayout.visibility = View.GONE
+        binding.controlsCard.visibility = View.GONE
         binding.instructionCard.visibility = View.VISIBLE
         updateWebViewVisibility()
         binding.webView.loadUrl("https://web.whatsapp.com")
@@ -185,6 +194,7 @@ class WebSyncActivity : AppCompatActivity() {
         }
         missingSearchActive = true
         binding.runMissingButton.text = "Caută contactele"
+        setRunningUI(true)
         binding.webView.evaluateJavascript("window.__waStop = false;", null)
         SyncForegroundService.start(this)
         updateProgress(if (resuming) "Reiau căutarea..." else "Se caută...", missingIndex, missingQueue.size)
@@ -197,6 +207,7 @@ class WebSyncActivity : AppCompatActivity() {
             updateProgress("Gata. Actualizate: $updated · Omise: $skipped", missingIndex, missingQueue.size)
             missingSearchActive = false
             SyncForegroundService.stop(this)
+            setRunningUI(false)
             return
         }
         val phone = missingQueue[missingIndex++]
